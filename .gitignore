@@ -1,7 +1,6 @@
 .venv/
-.venv/
 __pycache__/
 *.pyc
-evaluation.db
 .env
+evaluation.db
 .vscode/
