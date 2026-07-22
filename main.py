@@ -477,6 +477,3 @@ def export_excel(request:Request,db:Session=Depends(get_db)):
         a=e.affectation;ws.append([a.collaborateur.code,a.formation.titre,a.formation.type_formation,e.contenu,e.formateur,e.organisation,e.application_poste,e.satisfaction,e.recommande,e.observations or "",e.points_forts or "",e.points_ameliorer or "",e.date_reponse.strftime("%d/%m/%Y %H:%M")])
     out=io.BytesIO();wb.save(out);out.seek(0)
     return StreamingResponse(out,media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",headers={"Content-Disposition":'attachment; filename="evaluations_formations.xlsx"'})
-print("=" * 50)
-print("DATABASE_URL =", DATABASE_URL)
-print("=" * 50)
