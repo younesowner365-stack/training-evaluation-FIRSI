@@ -32,6 +32,13 @@ engine_kwargs = {"pool_pre_ping": True}
 if DATABASE_URL.startswith("sqlite"):
     engine_kwargs["connect_args"] = {"check_same_thread": False}
 engine = create_engine(DATABASE_URL, **engine_kwargs)
+
+# Diagnostic sécurisé : n'affiche jamais le mot de passe.
+print("========== DATABASE DIAGNOSTIC ==========", flush=True)
+print("BACKEND :", engine.url.get_backend_name(), flush=True)
+print("HOST :", engine.url.host or "LOCAL", flush=True)
+print("DATABASE :", engine.url.database, flush=True)
+print("=========================================", flush=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 Base = declarative_base()
 
