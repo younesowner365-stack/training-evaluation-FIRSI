@@ -1,39 +1,46 @@
-# Training Evaluation FIRSI — WOW V2
+# FIRSI Formation Experience — Version Pro V4
 
-## Fonctionnalités
-- Page d'accès unique : Admin/RH et Collaborateur
-- Comptes Admin et RH avec rôles
-- Comptes collaborateurs avec mot de passe temporaire
-- Changement obligatoire du mot de passe à la première connexion
-- Gestion collaborateurs, formations, affectations et évaluations
-- Dashboard interactif Chart.js
-- Export Excel
-- SQLite local / Neon PostgreSQL sur Render
+Plateforme FastAPI avec trois espaces sécurisés : Administrateur, RH et Collaborateur.
 
 ## Installation locale
+
 ```powershell
-python -m venv .venv
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
+python reset_admin.py
 python -m uvicorn main:app --reload
 ```
 
-## Premier accès
+Ouvrir : `http://127.0.0.1:8000`
+
+Compte initial local :
+
 - Identifiant : `admin`
 - Mot de passe temporaire : `Admin@2026`
-- Le changement de mot de passe est obligatoire.
 
-En production, configurez dans Render :
-- `DATABASE_URL` : connexion Neon
+## Render / Neon
+
+Variables recommandées :
+
+- `DATABASE_URL` : chaîne PostgreSQL Neon
 - `SECRET_KEY` : chaîne aléatoire longue
-- `ADMIN_USERNAME`
-- `ADMIN_PASSWORD`
-- `ENVIRONMENT=production`
+- `ENVIRONMENT` : `production`
+- `ADMIN_USERNAME` : identifiant administrateur
+- `ADMIN_PASSWORD` : mot de passe temporaire initial
+- `ADMIN_EMAIL` : facultatif
 
-## Mise à jour GitHub / Render
-```powershell
-git add .
-git commit -m "Mise à jour V2 WOW"
-git push
+Pour forcer une réinitialisation unique de l’administrateur sur Render, ajouter temporairement :
+
+- `RESET_ADMIN_ON_START=true`
+
+Après connexion et changement du mot de passe, supprimer cette variable ou la passer à `false`.
+
+Commande de démarrage Render :
+
+```bash
+uvicorn main:app --host 0.0.0.0 --port $PORT
 ```
+
+## Footer
+
+`© FIRSI - UM6P`

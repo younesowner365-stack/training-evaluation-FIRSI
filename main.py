@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+import base64
+import hashlib
+import hmac
 import io
 import os
 import secrets
@@ -17,7 +20,6 @@ from sqlalchemy import (
     ForeignKey, Text, UniqueConstraint, func
 )
 from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship
-from passlib.context import CryptContext
 from openpyxl import Workbook
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -32,7 +34,6 @@ if DATABASE_URL.startswith("sqlite"):
 engine = create_engine(DATABASE_URL, **engine_kwargs)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 Base = declarative_base()
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 class User(Base):
@@ -58,7 +59,7 @@ class Collaborateur(Base):
     nom = Column(String(120), nullable=False)
     prenom = Column(String(120), nullable=False)
     email = Column(String(180), nullable=True)
-    direction = Column(String(180), nullable=True)
+    departement = Column("direction", String(180), nullable=True)
     fonction = Column(String(180), nullable=True)
     token = Column(String(100), unique=True, nullable=False, index=True)
     actif = Column(Boolean, default=True)
@@ -125,7 +126,7 @@ Base.metadata.create_all(bind=engine)
 app = FastAPI(title="Training Evaluation FIRSI", version="2.0")
 app.add_middleware(
     SessionMiddleware,
-    secret_key=os.getenv("SECRET_KEY", secrets.token_urlsafe(32)),
+    secret_key=os.getenv("SECRET_KEY", "firsi-local-development-secret-change-in-production"),
     same_site="lax",
     https_only=os.getenv("ENVIRONMENT") == "production",
     max_age=60 * 60 * 8,
@@ -145,23 +146,80 @@ def random_password(length=10):
     return "".join(secrets.choice(alphabet) for _ in range(length))
 
 
-def hash_password(password): return pwd_context.hash(password)
-def verify_password(password, hashed): return pwd_context.verify(password, hashed)
+def hash_password(password: str) -> str:
+    salt = secrets.token_bytes(16)
+    iterations = 390_000
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
+    return "pbkdf2_sha256${}${}${}".format(
+        iterations,
+        base64.urlsafe_b64encode(salt).decode("ascii"),
+        base64.urlsafe_b64encode(digest).decode("ascii"),
+    )
+
+
+def verify_password(password: str, stored_hash: str) -> bool:
+    if not stored_hash:
+        return False
+    if stored_hash.startswith("pbkdf2_sha256$"):
+        try:
+            _, iterations, salt_b64, digest_b64 = stored_hash.split("$", 3)
+            salt = base64.urlsafe_b64decode(salt_b64.encode("ascii"))
+            expected = base64.urlsafe_b64decode(digest_b64.encode("ascii"))
+            actual = hashlib.pbkdf2_hmac(
+                "sha256", password.encode("utf-8"), salt, int(iterations)
+            )
+            return hmac.compare_digest(actual, expected)
+        except (ValueError, TypeError):
+            return False
+
+    # Compatibility with existing bcrypt hashes from the previous version.
+    if stored_hash.startswith(("$2a$", "$2b$", "$2y$")):
+        try:
+            import bcrypt
+            return bcrypt.checkpw(password.encode("utf-8"), stored_hash.encode("utf-8"))
+        except Exception:
+            return False
+    return False
 
 
 def seed_admin():
+    """Create the first administrator and optionally reset it from environment variables."""
     db = SessionLocal()
     try:
-        if not db.query(User).filter(User.role == "ADMIN").first():
-            username = os.getenv("ADMIN_USERNAME", "admin")
-            password = os.getenv("ADMIN_PASSWORD", "Admin@2026")
-            db.add(User(fullname="Administrateur principal", username=username, email=os.getenv("ADMIN_EMAIL"),
-                        password_hash=hash_password(password), role="ADMIN", active=True,
-                        must_change_password=True))
-            db.commit()
-    finally: db.close()
-seed_admin()
+        username = os.getenv("ADMIN_USERNAME", "admin").strip()
+        password = os.getenv("ADMIN_PASSWORD", "Admin@2026")
+        email = os.getenv("ADMIN_EMAIL")
+        reset_requested = os.getenv("RESET_ADMIN_ON_START", "false").lower() == "true"
 
+        admin = db.query(User).filter(User.username == username).first()
+        if admin is None:
+            admin = User(
+                fullname="Administrateur principal",
+                username=username,
+                email=email,
+                password_hash=hash_password(password),
+                role="ADMIN",
+                active=True,
+                must_change_password=True,
+                failed_attempts=0,
+            )
+            db.add(admin)
+            db.commit()
+        elif reset_requested:
+            admin.password_hash = hash_password(password)
+            admin.role = "ADMIN"
+            admin.active = True
+            admin.must_change_password = True
+            admin.failed_attempts = 0
+            admin.locked_until = None
+            if email:
+                admin.email = email
+            db.commit()
+    finally:
+        db.close()
+
+
+seed_admin()
 
 def auth_user(request: Request, roles=None):
     uid = request.session.get("user_id")
@@ -244,11 +302,27 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
         "satisfaction": round(sum(e.satisfaction for e in evaluations)/len(evaluations),2) if evaluations else 0,
         "recommandation": round(sum(e.recommande=="Oui" for e in evaluations)/len(evaluations)*100,1) if evaluations else 0,
     }
-    by_training = db.query(Formation.titre, func.avg(Evaluation.satisfaction)).join(Affectation).join(Evaluation).group_by(Formation.id).all()
+    by_training = (
+        db.query(Formation.titre, func.avg(Evaluation.satisfaction))
+        .select_from(Formation)
+        .join(Affectation, Affectation.formation_id == Formation.id)
+        .join(Evaluation, Evaluation.affectation_id == Affectation.id)
+        .group_by(Formation.id, Formation.titre)
+        .order_by(func.avg(Evaluation.satisfaction).desc())
+        .all()
+    )
     distribution = [db.query(Evaluation).filter(Evaluation.satisfaction == i).count() for i in range(1,6)]
+    by_department = (db.query(Collaborateur.departement, func.count(Evaluation.id))
+        .join(Affectation, Affectation.collaborateur_id == Collaborateur.id)
+        .join(Evaluation, Evaluation.affectation_id == Affectation.id)
+        .filter(Collaborateur.departement.isnot(None))
+        .group_by(Collaborateur.departement).all())
+    recent = db.query(Evaluation).order_by(Evaluation.date_reponse.desc()).limit(6).all()
+    pending = max(affect_count - len(evaluations), 0)
     return templates.TemplateResponse(request=request, name="dashboard.html", context={
-        "active_page":"dashboard", "user":user, "kpis":kpis,
+        "active_page":"dashboard", "user":user, "kpis":kpis, "pending":pending, "recent":recent,
         "chart_labels":[x[0] for x in by_training], "chart_values":[round(float(x[1]),2) for x in by_training],
+        "department_labels":[x[0] for x in by_department], "department_values":[x[1] for x in by_department],
         "distribution":distribution})
 
 
@@ -291,9 +365,9 @@ def collaborators_page(request:Request,db:Session=Depends(get_db)):
 
 
 @app.post("/collaborateurs")
-def create_collaborator(request:Request,nom:str=Form(...),prenom:str=Form(...),email:str=Form(""),direction:str=Form(""),fonction:str=Form(""),db:Session=Depends(get_db)):
+def create_collaborator(request:Request,nom:str=Form(...),prenom:str=Form(...),email:str=Form(""),departement:str=Form(""),fonction:str=Form(""),db:Session=Depends(get_db)):
     if not require_staff(request):return redirect_login()
-    temp=random_password(); c=Collaborateur(code=next_code(db),nom=nom.strip(),prenom=prenom.strip(),email=email.strip() or None,direction=direction.strip() or None,fonction=fonction.strip() or None,token=secrets.token_urlsafe(24),actif=True)
+    temp=random_password(); c=Collaborateur(code=next_code(db),nom=nom.strip(),prenom=prenom.strip(),email=email.strip() or None,departement=departement.strip() or None,fonction=fonction.strip() or None,token=secrets.token_urlsafe(24),actif=True)
     db.add(c);db.flush();db.add(CollaboratorAccount(collaborateur_id=c.id,password_hash=hash_password(temp),must_change_password=True));db.commit()
     return RedirectResponse(f"/collaborateurs?temp={temp}&code={c.code}",303)
 
