@@ -11,3 +11,5 @@ python -m uvicorn app:app --reload
 ```
 
 Ouvrir http://127.0.0.1:8000
+
+Redeploiement correction main.py
