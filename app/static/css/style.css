@@ -35,3 +35,7 @@ table{width:100%;border-collapse:collapse;background:#fff}th,td{padding:12px;bor
 .copy-row{display:flex;gap:10px;align-items:center}.copy-row input{flex:1}
 .action-stack{display:flex;gap:8px;flex-wrap:wrap}.action-stack form{margin:0}
 .danger-zone{border-color:#fecdca;background:#fffafa}.error{background:#fef3f2;color:#b42318;padding:12px;border-radius:10px;margin-bottom:14px}
+
+.kpi-highlight{border-color:#c7d7fe;background:linear-gradient(180deg,#ffffff,#f5f8ff)}
+.kpi-highlight strong{color:#2447d8}
+.metric-note{font-size:13px;color:#667085;line-height:1.5;margin:14px 0 0}

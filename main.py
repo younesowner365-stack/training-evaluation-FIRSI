@@ -359,10 +359,33 @@ def logout(request:Request):request.session.clear();return RedirectResponse("/",
 def dashboard(request:Request,db:Session=Depends(get_db)):
     if not require_staff(request):return RedirectResponse("/",303)
 
+    total_collaborateurs=db.query(Collaborateur).filter(Collaborateur.actif.is_(True)).count()
     total_aff=db.query(Affectation).count()
     total_rep=db.query(Reponse).count()
     pending=max(total_aff-total_rep,0)
     satisfaction=db.query(func.avg(Reponse.satisfaction_globale)).scalar() or 0
+
+    # Taux de couverture des formations :
+    # collaborateurs actifs ayant au moins une affectation à une session
+    # de catégorie "Formation" / collaborateurs actifs.
+    collaborateurs_formes=(
+        db.query(func.count(func.distinct(Affectation.collaborateur_id)))
+        .join(SessionFormation,Affectation.session_id==SessionFormation.id)
+        .join(Categorie,SessionFormation.categorie_id==Categorie.id)
+        .join(Collaborateur,Affectation.collaborateur_id==Collaborateur.id)
+        .filter(
+            func.lower(Categorie.nom)=="formation",
+            Collaborateur.actif.is_(True),
+        )
+        .scalar()
+    ) or 0
+    taux_couverture=round(
+        collaborateurs_formes/total_collaborateurs*100,1
+    ) if total_collaborateurs else 0
+
+    # Taux de participation aux évaluations :
+    # réponses reçues / affectations créées.
+    taux_participation=round(total_rep/total_aff*100,1) if total_aff else 0
 
     # Questions, réponses reçues et réponses en attente par thématique
     themes=[]
@@ -423,12 +446,16 @@ def dashboard(request:Request,db:Session=Depends(get_db)):
     return templates.TemplateResponse("dashboard.html",{
         "request":request,
         "kpis":{
-            "collaborateurs":db.query(Collaborateur).filter(Collaborateur.actif.is_(True)).count(),
+            "collaborateurs":total_collaborateurs,
+            "collaborateurs_formes":collaborateurs_formes,
             "sessions":db.query(SessionFormation).filter(SessionFormation.active.is_(True)).count(),
-            "participation":round(total_rep/total_aff*100,1) if total_aff else 0,
+            "couverture":taux_couverture,
+            "participation":taux_participation,
             "satisfaction":round(float(satisfaction),2),
             "attente":pending,
             "recues":total_rep,
+            "affectations":total_aff,
+            "non_formes":max(total_collaborateurs-collaborateurs_formes,0),
         },
         "themes":themes,
         "department_labels":[x[0] for x in deps],
