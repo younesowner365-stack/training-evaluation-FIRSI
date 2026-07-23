@@ -2,5 +2,5 @@
 __pycache__/
 *.pyc
 .env
-evaluation.db
-.vscode/
+*.db
+.pytest_cache/
