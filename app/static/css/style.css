@@ -30,3 +30,8 @@ table{width:100%;border-collapse:collapse;background:#fff}th,td{padding:12px;bor
 .pending-list{display:flex;flex-direction:column;gap:10px}.pending-item{display:flex;justify-content:space-between;align-items:center;padding:14px;background:#f8f9fc;border-radius:12px}.pending-item div span{display:block;color:#667085;font-size:13px;margin-top:3px}.status-warning{background:#fff7e6;color:#b54708;padding:6px 10px;border-radius:999px;font-size:12px;font-weight:800}
 .insight-card{background:linear-gradient(180deg,#fff,#f8faff)}.insight-box{padding:16px;border:1px solid #e6e9f0;border-radius:12px;margin-top:12px;background:#fff}.insight-box p{margin:6px 0 0;color:#667085}.empty-state{padding:28px;text-align:center;color:#98a2b3;background:#f8f9fc;border-radius:12px}
 @media(max-width:1400px){.grid-6{grid-template-columns:repeat(3,1fr)}}@media(max-width:900px){.grid-6{grid-template-columns:1fr}.dashboard-hero{align-items:flex-start;flex-direction:column}}
+
+.notice-box{background:#eff8ff;border:1px solid #b2ddff;color:#175cd3;padding:16px;border-radius:12px;margin-bottom:18px}
+.copy-row{display:flex;gap:10px;align-items:center}.copy-row input{flex:1}
+.action-stack{display:flex;gap:8px;flex-wrap:wrap}.action-stack form{margin:0}
+.danger-zone{border-color:#fecdca;background:#fffafa}.error{background:#fef3f2;color:#b42318;padding:12px;border-radius:10px;margin-bottom:14px}

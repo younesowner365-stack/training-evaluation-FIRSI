@@ -1,1 +1,33 @@
-{% extends "base.html" %}{% block page_title %}Comptes RH / Admin{% endblock %}{% block content %}<div class="grid grid-2"><div class="card"><form method="post"><label>Nom complet</label><input name="fullname" required><label>Identifiant</label><input name="username" required><label>E-mail</label><input name="email"><label>Rôle</label><select name="role"><option>RH</option><option>ADMIN</option></select><label>Mot de passe temporaire</label><input type="password" name="password" required><br><br><button class="btn">Créer</button></form></div><div class="card"><table><tr><th>Nom</th><th>Rôle</th></tr>{% for u in users %}<tr><td>{{ u.fullname }}</td><td>{{ u.role }}</td></tr>{% endfor %}</table></div></div>{% endblock %}
+{% extends "base.html" %}
+{% block page_title %}Comptes RH / Admin{% endblock %}
+{% block content %}
+{% if cleanup == 'success' %}<div class="success">Données de test supprimées.</div>
+{% elif cleanup %}<div class="error">Le nettoyage n’a pas pu être réalisé.</div>{% endif %}
+<div class="grid grid-2">
+  <div class="card">
+    <h3>Nouveau compte</h3>
+    <form method="post">
+      <label>Nom complet</label><input name="fullname" required>
+      <label>Identifiant</label><input name="username" required>
+      <label>E-mail</label><input name="email">
+      <label>Rôle</label><select name="role"><option>RH</option><option>ADMIN</option></select>
+      <label>Mot de passe temporaire</label><input type="password" name="password" required>
+      <br><br><button class="btn">Créer</button>
+    </form>
+  </div>
+  <div class="card">
+    <h3>Utilisateurs</h3>
+    <table><tr><th>Nom</th><th>Rôle</th></tr>{% for u in users %}<tr><td>{{ u.fullname }}</td><td>{{ u.role }}</td></tr>{% endfor %}</table>
+  </div>
+</div>
+<br>
+<div class="card danger-zone">
+  <h3>Nettoyer les données de test</h3>
+  <p>Supprime les collaborateurs, sessions, affectations, réponses et codes OTP. Les comptes Admin/RH, départements, thématiques et questionnaires sont conservés.</p>
+  <form method="post" action="/admin/nettoyage-tests" onsubmit="return confirm('Cette opération est irréversible. Continuer ?');">
+    <label>Tape NETTOYER pour confirmer</label>
+    <input name="confirmation" required>
+    <br><br><button class="btn danger">Nettoyer les données de test</button>
+  </form>
+</div>
+{% endblock %}

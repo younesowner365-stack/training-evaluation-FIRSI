@@ -1,1 +1,44 @@
-{% extends "base.html" %}{% block page_title %}Collaborateurs{% endblock %}{% block content %}<div class="grid grid-2"><div class="card"><form method="post"><label>Nom</label><input name="nom" required><label>Prénom</label><input name="prenom" required><label>E-mail</label><input type="email" name="email" required><label>Fonction</label><input name="fonction"><label>Département</label><select name="departement_id"><option value="">—</option>{% for d in departements %}<option value="{{ d.id }}">{{ d.nom }}</option>{% endfor %}</select><br><br><button class="btn">Ajouter</button></form></div><div class="card"><table><tr><th>Code</th><th>Collaborateur</th><th>Département</th></tr>{% for c in collaborateurs %}<tr><td>{{ c.code }}</td><td>{{ c.prenom }} {{ c.nom }}<br><span class="muted">{{ c.email }}</span></td><td>{{ c.departement.nom if c.departement else '' }}</td></tr>{% endfor %}</table></div></div>{% endblock %}
+{% extends "base.html" %}
+{% block page_title %}Collaborateurs{% endblock %}
+{% block content %}
+{% if message %}<div class="success">Opération réalisée avec succès.</div>{% endif %}
+{% if error == 'email_existant' %}<div class="error">Cette adresse e-mail existe déjà.</div>
+{% elif error %}<div class="error">Impossible d’effectuer cette opération.</div>{% endif %}
+
+<div class="grid grid-2">
+  <div class="card">
+    <h3>Nouveau collaborateur</h3>
+    <form method="post">
+      <label>Nom</label><input name="nom" required>
+      <label>Prénom</label><input name="prenom" required>
+      <label>E-mail</label><input type="email" name="email" required>
+      <label>Fonction</label><input name="fonction">
+      <label>Département</label>
+      <select name="departement_id">
+        <option value="">—</option>
+        {% for d in departements %}<option value="{{ d.id }}">{{ d.nom }}</option>{% endfor %}
+      </select>
+      <br><br><button class="btn">Ajouter</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h3>Liste des collaborateurs</h3>
+    <table>
+      <tr><th>Code</th><th>Collaborateur</th><th>Département</th><th>Action</th></tr>
+      {% for c in collaborateurs %}
+      <tr>
+        <td>{{ c.code }}</td>
+        <td>{{ c.prenom }} {{ c.nom }}<br><span class="muted">{{ c.email }}</span></td>
+        <td>{{ c.departement.nom if c.departement else '' }}</td>
+        <td>
+          <form method="post" action="/collaborateurs/{{ c.id }}/delete" onsubmit="return confirm('Supprimer ce collaborateur et toutes ses données liées ?');">
+            <button class="btn danger">Supprimer</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+</div>
+{% endblock %}

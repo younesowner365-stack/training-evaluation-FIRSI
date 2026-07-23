@@ -11,8 +11,9 @@ from fastapi.responses import RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
-from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, ForeignKey, Text, UniqueConstraint, func, Float
+from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, ForeignKey, Text, UniqueConstraint, func, Float, text, inspect
 from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship
+from sqlalchemy.exc import IntegrityError
 from openpyxl import Workbook
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -186,14 +187,42 @@ def require_admin(request):
 def audit(db,request,action,details=""):
     db.add(AuditLog(acteur=request.session.get("name","système"),action=action,details=details));db.commit()
 
+def delete_legacy_evaluations(db:Session,affectation_ids:list[int]|None=None):
+    """Supprime aussi les évaluations de l’ancienne V4 si la table existe encore."""
+    if not inspect(engine).has_table("evaluations"):
+        return
+    if affectation_ids:
+        for aid in affectation_ids:
+            db.execute(text("DELETE FROM evaluations WHERE affectation_id = :aid"),{"aid":aid})
+    else:
+        db.execute(text("DELETE FROM evaluations"))
+
 def send_email(to_email,subject,body):
+    """Envoie un e-mail SMTP. Retourne (succès, message utilisateur)."""
     host=os.getenv("SMTP_HOST");user=os.getenv("SMTP_USERNAME");pwd=os.getenv("SMTP_PASSWORD")
-    if not all([host,user,pwd]):
-        print(f"[EMAIL DEV] {to_email} | {subject}\n{body}",flush=True);return False
-    msg=EmailMessage();msg["From"]=os.getenv("SMTP_FROM",user);msg["To"]=to_email;msg["Subject"]=subject;msg.set_content(body)
-    with smtplib.SMTP(host,int(os.getenv("SMTP_PORT","587")),timeout=20) as server:
-        server.starttls();server.login(user,pwd);server.send_message(msg)
-    return True
+    port=int(os.getenv("SMTP_PORT","587"));sender=os.getenv("SMTP_FROM",user or "")
+    if not all([host,user,pwd,sender]):
+        print(f"[EMAIL NON CONFIGURÉ] {to_email} | {subject}\n{body}",flush=True)
+        return False,"La messagerie SMTP n’est pas encore configurée sur Render."
+    try:
+        msg=EmailMessage();msg["From"]=sender;msg["To"]=to_email;msg["Subject"]=subject;msg.set_content(body)
+        with smtplib.SMTP(host,port,timeout=25) as server:
+            server.ehlo();server.starttls();server.ehlo();server.login(user,pwd);server.send_message(msg)
+        return True,"E-mail envoyé avec succès."
+    except Exception as exc:
+        print(f"[ERREUR SMTP] {type(exc).__name__}: {exc}",flush=True)
+        return False,"Échec de l’envoi. Vérifiez les paramètres SMTP dans Render."
+
+
+def public_base_url(request: Request) -> str:
+    configured = os.getenv("APP_BASE_URL", "").strip().rstrip("/")
+    if configured:
+        return configured
+    return str(request.base_url).rstrip("/")
+
+def invitation_link(request: Request, affectation_id: int) -> str:
+    return f"{public_base_url(request)}/?invitation={affectation_id}"
+
 
 def seed():
     db=SessionLocal()
@@ -240,7 +269,7 @@ def otp_request(request:Request,email:str=Form(...),db:Session=Depends(get_db)):
     code="".join(secrets.choice(string.digits) for _ in range(6))
     db.query(OTPCode).filter_by(email=email,used=False).update({"used":True})
     db.add(OTPCode(email=email,code_hash=hash_password(code),expires_at=datetime.utcnow()+timedelta(minutes=10)));db.commit()
-    sent=send_email(email,"Code de connexion FIRSI - UM6P",f"Votre code est : {code}\nValable 10 minutes.")
+    sent,_=send_email(email,"Code de connexion FIRSI - UM6P",f"Votre code est : {code}\nValable 10 minutes.")
     request.session["otp_email"]=email
     if not sent and os.getenv("ENVIRONMENT")!="production":request.session["dev_otp"]=code
     return RedirectResponse("/otp",303)
@@ -406,43 +435,157 @@ def create_department(request:Request,nom:str=Form(...),db:Session=Depends(get_d
 @app.get("/collaborateurs")
 def collabs_page(request:Request,db:Session=Depends(get_db)):
     if not require_staff(request):return RedirectResponse("/",303)
-    return templates.TemplateResponse("collaborateurs.html",{"request":request,"collaborateurs":db.query(Collaborateur).order_by(Collaborateur.id.desc()).all(),"departements":db.query(Departement).all()})
+    return templates.TemplateResponse("collaborateurs.html",{
+        "request":request,
+        "collaborateurs":db.query(Collaborateur).order_by(Collaborateur.id.desc()).all(),
+        "departements":db.query(Departement).all(),
+        "message":request.query_params.get("message"),
+        "error":request.query_params.get("error"),
+    })
 
 @app.post("/collaborateurs")
 def create_collab(request:Request,nom:str=Form(...),prenom:str=Form(...),email:str=Form(...),fonction:str=Form(""),departement_id:int|None=Form(None),db:Session=Depends(get_db)):
     if not require_staff(request):return RedirectResponse("/",303)
+    clean_email=email.strip().lower()
+    if db.query(Collaborateur).filter(func.lower(Collaborateur.email)==clean_email).first():
+        return RedirectResponse("/collaborateurs?error=email_existant",303)
     code=f"COL-{(db.query(func.max(Collaborateur.id)).scalar() or 0)+1:04d}"
-    db.add(Collaborateur(code=code,nom=nom.strip(),prenom=prenom.strip(),email=email.strip().lower(),fonction=fonction.strip() or None,departement_id=departement_id));db.commit();return RedirectResponse("/collaborateurs",303)
+    try:
+        db.add(Collaborateur(code=code,nom=nom.strip(),prenom=prenom.strip(),email=clean_email,fonction=fonction.strip() or None,departement_id=departement_id))
+        db.commit()
+        audit(db,request,"Création collaborateur",f"{prenom.strip()} {nom.strip()} ({clean_email})")
+        return RedirectResponse("/collaborateurs?message=collaborateur_ajoute",303)
+    except IntegrityError:
+        db.rollback()
+        return RedirectResponse("/collaborateurs?error=donnees_dupliquees",303)
+
+@app.post("/collaborateurs/{cid}/delete")
+def delete_collaborateur(cid:int,request:Request,db:Session=Depends(get_db)):
+    if not require_staff(request):return RedirectResponse("/",303)
+    c=db.get(Collaborateur,cid)
+    if not c:return RedirectResponse("/collaborateurs?error=introuvable",303)
+    label=f"{c.prenom} {c.nom}";email=c.email
+    try:
+        # Nettoyage explicite pour PostgreSQL et les anciennes contraintes.
+        affectations=db.query(Affectation).filter(Affectation.collaborateur_id==cid).all()
+        delete_legacy_evaluations(db,[a.id for a in affectations])
+        for a in affectations:
+            if a.reponse:
+                db.query(ReponseDetail).filter(ReponseDetail.reponse_id==a.reponse.id).delete(synchronize_session=False)
+                db.delete(a.reponse)
+            db.delete(a)
+        db.query(OTPCode).filter(OTPCode.email==email).delete(synchronize_session=False)
+        if inspect(engine).has_table("collaborator_accounts"):
+            db.execute(text("DELETE FROM collaborator_accounts WHERE collaborateur_id = :cid"),{"cid":cid})
+        db.delete(c);db.commit()
+        audit(db,request,"Suppression collaborateur",label)
+        return RedirectResponse("/collaborateurs?message=collaborateur_supprime",303)
+    except Exception as exc:
+        db.rollback();print(f"[SUPPRESSION COLLABORATEUR] {exc}",flush=True)
+        return RedirectResponse("/collaborateurs?error=suppression_impossible",303)
 
 @app.get("/sessions")
 def sessions_page(request:Request,db:Session=Depends(get_db)):
     if not require_staff(request):return RedirectResponse("/",303)
-    return templates.TemplateResponse("sessions.html",{"request":request,"sessions":db.query(SessionFormation).order_by(SessionFormation.id.desc()).all(),"categories":db.query(Categorie).all(),"questionnaires":db.query(Questionnaire).all()})
+    return templates.TemplateResponse("sessions.html",{
+        "request":request,"sessions":db.query(SessionFormation).order_by(SessionFormation.id.desc()).all(),
+        "categories":db.query(Categorie).all(),"questionnaires":db.query(Questionnaire).all(),
+        "message":request.query_params.get("message"),"error":request.query_params.get("error")
+    })
 
 @app.post("/sessions")
 def create_session(request:Request,titre:str=Form(...),categorie_id:int=Form(...),questionnaire_id:int=Form(...),date_debut:str=Form(""),date_fin:str=Form(""),lieu:str=Form(""),animateur:str=Form(""),description:str=Form(""),db:Session=Depends(get_db)):
     if not require_staff(request):return RedirectResponse("/",303)
     db.add(SessionFormation(titre=titre.strip(),categorie_id=categorie_id,questionnaire_id=questionnaire_id,date_debut=date_debut or None,date_fin=date_fin or None,lieu=lieu.strip() or None,animateur=animateur.strip() or None,description=description.strip() or None));db.commit();return RedirectResponse("/sessions",303)
 
+@app.post("/sessions/{sid}/delete")
+def delete_session(sid:int,request:Request,db:Session=Depends(get_db)):
+    if not require_staff(request):return RedirectResponse("/",303)
+    session=db.get(SessionFormation,sid)
+    if not session:return RedirectResponse("/sessions?error=introuvable",303)
+    try:
+        session_affectations=list(session.affectations)
+        delete_legacy_evaluations(db,[a.id for a in session_affectations])
+        for a in session_affectations:
+            if a.reponse:
+                db.query(ReponseDetail).filter(ReponseDetail.reponse_id==a.reponse.id).delete(synchronize_session=False)
+                db.delete(a.reponse)
+            db.delete(a)
+        titre=session.titre;db.delete(session);db.commit();audit(db,request,"Suppression session",titre)
+        return RedirectResponse("/sessions?message=session_supprimee",303)
+    except Exception as exc:
+        db.rollback();print(f"[SUPPRESSION SESSION] {exc}",flush=True)
+        return RedirectResponse("/sessions?error=suppression_impossible",303)
+
 @app.get("/affectations")
 def assignments_page(request:Request,db:Session=Depends(get_db)):
     if not require_staff(request):return RedirectResponse("/",303)
-    return templates.TemplateResponse("affectations.html",{"request":request,"affectations":db.query(Affectation).order_by(Affectation.id.desc()).all(),"collaborateurs":db.query(Collaborateur).filter_by(actif=True).all(),"sessions":db.query(SessionFormation).filter_by(active=True).all()})
+    return templates.TemplateResponse("affectations.html",{
+        "request":request,"affectations":db.query(Affectation).order_by(Affectation.id.desc()).all(),
+        "collaborateurs":db.query(Collaborateur).filter_by(actif=True).all(),
+        "sessions":db.query(SessionFormation).filter_by(active=True).all(),
+        "mail_status":request.query_params.get("mail_status"),
+        "invite_link":request.query_params.get("invite_link"),
+        "message":request.query_params.get("message"),"error":request.query_params.get("error")
+    })
 
 @app.post("/affectations")
 def create_assignment(request:Request,collaborateur_id:int=Form(...),session_id:int=Form(...),envoyer_invitation:str=Form("non"),db:Session=Depends(get_db)):
     if not require_staff(request):return RedirectResponse("/",303)
     if not db.query(Affectation).filter_by(collaborateur_id=collaborateur_id,session_id=session_id).first():
         a=Affectation(collaborateur_id=collaborateur_id,session_id=session_id);db.add(a);db.commit();db.refresh(a)
-        if envoyer_invitation=="oui":a.invitation_envoyee=send_email(a.collaborateur.email,"Invitation FIRSI - UM6P",f"Bonjour {a.collaborateur.prenom}, merci d'évaluer {a.session.titre}.");db.commit()
-    return RedirectResponse("/affectations",303)
+        if envoyer_invitation=="oui":
+            link=invitation_link(request,a.id)
+            sent,_=send_email(
+                a.collaborateur.email,
+                "Invitation FIRSI - UM6P",
+                f"Bonjour {a.collaborateur.prenom},\n\n"
+                f"Merci d’évaluer : {a.session.titre}.\n"
+                f"Accédez à la plateforme : {link}\n"
+                f"Puis connectez-vous avec votre adresse e-mail professionnelle."
+            )
+            a.invitation_envoyee=sent;db.commit()
+            return RedirectResponse(
+                f"/affectations?mail_status={'sent' if sent else 'link'}&invite_link={link}",
+                303
+            )
+    return RedirectResponse("/affectations?message=affectation_ajoutee",303)
 
 @app.post("/affectations/{aid}/invite")
 def invite(aid:int,request:Request,db:Session=Depends(get_db)):
     if not require_staff(request):return RedirectResponse("/",303)
     a=db.get(Affectation,aid)
-    if a:send_email(a.collaborateur.email,"Rappel FIRSI - UM6P",f"Merci d'évaluer {a.session.titre}.")
-    return RedirectResponse("/affectations",303)
+    if not a:return RedirectResponse("/affectations?error=introuvable",303)
+    link=invitation_link(request,a.id)
+    sent,_=send_email(
+        a.collaborateur.email,
+        "Rappel d’évaluation FIRSI - UM6P",
+        f"Bonjour {a.collaborateur.prenom},\n\n"
+        f"Merci de compléter l’évaluation de : {a.session.titre}.\n"
+        f"Accédez à la plateforme : {link}\n"
+        f"Puis connectez-vous avec votre adresse e-mail professionnelle."
+    )
+    a.invitation_envoyee=sent;db.commit()
+    return RedirectResponse(
+        f"/affectations?mail_status={'sent' if sent else 'link'}&invite_link={link}",
+        303
+    )
+
+@app.post("/affectations/{aid}/delete")
+def delete_affectation(aid:int,request:Request,db:Session=Depends(get_db)):
+    if not require_staff(request):return RedirectResponse("/",303)
+    a=db.get(Affectation,aid)
+    if not a:return RedirectResponse("/affectations?error=introuvable",303)
+    try:
+        delete_legacy_evaluations(db,[a.id])
+        if a.reponse:
+            db.query(ReponseDetail).filter(ReponseDetail.reponse_id==a.reponse.id).delete(synchronize_session=False)
+            db.delete(a.reponse)
+        db.delete(a);db.commit()
+        return RedirectResponse("/affectations?message=affectation_supprimee",303)
+    except Exception as exc:
+        db.rollback();print(f"[SUPPRESSION AFFECTATION] {exc}",flush=True)
+        return RedirectResponse("/affectations?error=suppression_impossible",303)
 
 @app.get("/mon-espace")
 def collaborator_space(request:Request,db:Session=Depends(get_db)):
@@ -545,10 +688,30 @@ def export_pdf(request:Request,db:Session=Depends(get_db)):
     ])
     return StreamingResponse(io.BytesIO(data),media_type="application/pdf",headers={"Content-Disposition":'attachment; filename="rapport_firsi.pdf"'})
 
+@app.post("/admin/nettoyage-tests")
+def cleanup_test_data(request:Request,confirmation:str=Form(...),db:Session=Depends(get_db)):
+    if not require_admin(request):return RedirectResponse("/",303)
+    if confirmation.strip().upper()!="NETTOYER":return RedirectResponse("/admin/utilisateurs?cleanup=confirmation",303)
+    try:
+        delete_legacy_evaluations(db)
+        db.query(ReponseDetail).delete(synchronize_session=False)
+        db.query(Reponse).delete(synchronize_session=False)
+        db.query(Affectation).delete(synchronize_session=False)
+        db.query(SessionFormation).delete(synchronize_session=False)
+        db.query(OTPCode).delete(synchronize_session=False)
+        if inspect(engine).has_table("collaborator_accounts"):
+            db.execute(text("DELETE FROM collaborator_accounts"))
+        db.query(Collaborateur).delete(synchronize_session=False)
+        db.commit();audit(db,request,"Nettoyage des données de test","Collaborateurs, sessions, affectations, réponses et OTP supprimés")
+        return RedirectResponse("/admin/utilisateurs?cleanup=success",303)
+    except Exception as exc:
+        db.rollback();print(f"[NETTOYAGE TESTS] {exc}",flush=True)
+        return RedirectResponse("/admin/utilisateurs?cleanup=error",303)
+
 @app.get("/admin/utilisateurs")
 def users_page(request:Request,db:Session=Depends(get_db)):
     if not require_admin(request):return RedirectResponse("/",303)
-    return templates.TemplateResponse("users.html",{"request":request,"users":db.query(User).all()})
+    return templates.TemplateResponse("users.html",{"request":request,"users":db.query(User).all(),"cleanup":request.query_params.get("cleanup")})
 
 @app.post("/admin/utilisateurs")
 def create_user(request:Request,fullname:str=Form(...),username:str=Form(...),email:str=Form(""),role:str=Form("RH"),password:str=Form(...),db:Session=Depends(get_db)):

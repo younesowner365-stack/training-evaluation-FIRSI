@@ -1,1 +1,80 @@
-{% extends "base.html" %}{% block page_title %}Affectations & invitations{% endblock %}{% block content %}<div class="grid grid-2"><div class="card"><form method="post"><label>Collaborateur</label><select name="collaborateur_id">{% for c in collaborateurs %}<option value="{{ c.id }}">{{ c.prenom }} {{ c.nom }}</option>{% endfor %}</select><label>Session</label><select name="session_id">{% for s in sessions %}<option value="{{ s.id }}">{{ s.titre }}</option>{% endfor %}</select><label>Envoyer invitation</label><select name="envoyer_invitation"><option value="oui">Oui</option><option value="non">Non</option></select><br><br><button class="btn">Affecter</button></form></div><div class="card"><table><tr><th>Collaborateur</th><th>Session</th><th>Statut</th><th></th></tr>{% for a in affectations %}<tr><td>{{ a.collaborateur.prenom }} {{ a.collaborateur.nom }}</td><td>{{ a.session.titre }}</td><td>{{ a.statut }}</td><td><form method="post" action="/affectations/{{ a.id }}/invite"><button class="btn secondary">Relancer</button></form></td></tr>{% endfor %}</table></div></div>{% endblock %}
+{% extends "base.html" %}
+{% block page_title %}Affectations & invitations{% endblock %}
+{% block content %}
+
+{% if mail_status == 'sent' %}
+<div class="success">Invitation envoyée avec succès.</div>
+{% elif mail_status == 'link' and invite_link %}
+<div class="notice-box">
+  <strong>SMTP non disponible : lien généré avec succès.</strong>
+  <p>Copie ce lien et envoie-le manuellement au collaborateur.</p>
+  <div class="copy-row">
+    <input id="inviteLink" value="{{ invite_link }}" readonly>
+    <button class="btn" type="button" onclick="copyInviteLink()">Copier le lien</button>
+  </div>
+</div>
+{% endif %}
+
+{% if message %}<div class="success">Opération réalisée avec succès.</div>{% endif %}
+{% if error %}<div class="error">Une erreur est survenue.</div>{% endif %}
+
+<div class="grid grid-2">
+  <div class="card">
+    <h3>Nouvelle affectation</h3>
+    <form method="post">
+      <label>Collaborateur</label>
+      <select name="collaborateur_id" required>
+        {% for c in collaborateurs %}<option value="{{ c.id }}">{{ c.prenom }} {{ c.nom }} — {{ c.email }}</option>{% endfor %}
+      </select>
+      <label>Session</label>
+      <select name="session_id" required>
+        {% for s in sessions %}<option value="{{ s.id }}">{{ s.titre }}</option>{% endfor %}
+      </select>
+      <label>Envoyer une invitation</label>
+      <select name="envoyer_invitation">
+        <option value="oui">Oui</option>
+        <option value="non">Non</option>
+      </select>
+      <br><br><button class="btn">Affecter</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h3>Affectations existantes</h3>
+    <table>
+      <tr><th>Collaborateur</th><th>Session</th><th>Statut</th><th>Actions</th></tr>
+      {% for a in affectations %}
+      <tr>
+        <td>{{ a.collaborateur.prenom }} {{ a.collaborateur.nom }}<br><span class="muted">{{ a.collaborateur.email }}</span></td>
+        <td>{{ a.session.titre }}</td>
+        <td>{{ a.statut }}</td>
+        <td>
+          <div class="action-stack">
+            <form method="post" action="/affectations/{{ a.id }}/invite">
+              <button class="btn secondary">Relancer</button>
+            </form>
+            <form method="post" action="/affectations/{{ a.id }}/delete" onsubmit="return confirm('Supprimer cette affectation ?');">
+              <button class="btn danger">Supprimer</button>
+            </form>
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+</div>
+
+<script>
+function copyInviteLink(){
+  const input=document.getElementById('inviteLink');
+  input.select();
+  input.setSelectionRange(0,99999);
+  navigator.clipboard.writeText(input.value).then(()=>{
+    alert('Lien copié.');
+  }).catch(()=>{
+    document.execCommand('copy');
+    alert('Lien copié.');
+  });
+}
+</script>
+{% endblock %}
