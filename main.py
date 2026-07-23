@@ -53,6 +53,7 @@ class Collaborateur(Base):
     nom=Column(String(120),nullable=False)
     prenom=Column(String(120),nullable=False)
     email=Column(String(180),unique=True,nullable=False)
+    token=Column(String(96),nullable=False,default=lambda: secrets.token_hex(24))
     fonction=Column(String(180))
     departement_id=Column(Integer,ForeignKey("departements.id"))
     actif=Column(Boolean,default=True)
@@ -221,7 +222,14 @@ def public_base_url(request: Request) -> str:
     return str(request.base_url).rstrip("/")
 
 def invitation_link(request: Request, affectation_id: int) -> str:
-    return f"{public_base_url(request)}/?invitation={affectation_id}"
+    db=SessionLocal()
+    try:
+        affectation=db.get(Affectation,affectation_id)
+        if affectation and affectation.collaborateur and affectation.collaborateur.token:
+            return f"{public_base_url(request)}/acces/{affectation.collaborateur.token}"
+        return public_base_url(request)
+    finally:
+        db.close()
 
 
 def seed():
@@ -441,6 +449,7 @@ def collabs_page(request:Request,db:Session=Depends(get_db)):
         "departements":db.query(Departement).all(),
         "message":request.query_params.get("message"),
         "error":request.query_params.get("error"),
+        "base_url":public_base_url(request),
     })
 
 @app.post("/collaborateurs")
@@ -451,7 +460,15 @@ def create_collab(request:Request,nom:str=Form(...),prenom:str=Form(...),email:s
         return RedirectResponse("/collaborateurs?error=email_existant",303)
     code=f"COL-{(db.query(func.max(Collaborateur.id)).scalar() or 0)+1:04d}"
     try:
-        db.add(Collaborateur(code=code,nom=nom.strip(),prenom=prenom.strip(),email=clean_email,fonction=fonction.strip() or None,departement_id=departement_id))
+        db.add(Collaborateur(
+            code=code,
+            nom=nom.strip(),
+            prenom=prenom.strip(),
+            email=clean_email,
+            token=secrets.token_hex(24),
+            fonction=fonction.strip() or None,
+            departement_id=departement_id
+        ))
         db.commit()
         audit(db,request,"Création collaborateur",f"{prenom.strip()} {nom.strip()} ({clean_email})")
         return RedirectResponse("/collaborateurs?message=collaborateur_ajoute",303)
@@ -586,6 +603,23 @@ def delete_affectation(aid:int,request:Request,db:Session=Depends(get_db)):
     except Exception as exc:
         db.rollback();print(f"[SUPPRESSION AFFECTATION] {exc}",flush=True)
         return RedirectResponse("/affectations?error=suppression_impossible",303)
+
+
+@app.get("/acces/{token}")
+def access_by_token(token:str,request:Request,db:Session=Depends(get_db)):
+    collaborateur=db.query(Collaborateur).filter(
+        Collaborateur.token==token,
+        Collaborateur.actif.is_(True)
+    ).first()
+    if not collaborateur:
+        return RedirectResponse("/?error=lien_invalide",303)
+    request.session.clear()
+    request.session.update({
+        "role":"COLLABORATEUR",
+        "collaborateur_id":collaborateur.id,
+        "name":f"{collaborateur.prenom} {collaborateur.nom}"
+    })
+    return RedirectResponse("/mon-espace",303)
 
 @app.get("/mon-espace")
 def collaborator_space(request:Request,db:Session=Depends(get_db)):

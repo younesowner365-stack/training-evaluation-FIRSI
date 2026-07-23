@@ -25,14 +25,21 @@
   <div class="card">
     <h3>Liste des collaborateurs</h3>
     <table>
-      <tr><th>Code</th><th>Collaborateur</th><th>Département</th><th>Action</th></tr>
+      <tr><th>Code</th><th>Collaborateur</th><th>Département</th><th>Accès</th><th>Action</th></tr>
       {% for c in collaborateurs %}
       <tr>
         <td>{{ c.code }}</td>
         <td>{{ c.prenom }} {{ c.nom }}<br><span class="muted">{{ c.email }}</span></td>
         <td>{{ c.departement.nom if c.departement else '' }}</td>
         <td>
-          <form method="post" action="/collaborateurs/{{ c.id }}/delete" onsubmit="return confirm('Supprimer ce collaborateur et toutes ses données liées ?');">
+          <button class="btn secondary" type="button"
+            onclick="copyAccessLink('{{ base_url }}/acces/{{ c.token }}')">
+            Copier le lien
+          </button>
+        </td>
+        <td>
+          <form method="post" action="/collaborateurs/{{ c.id }}/delete"
+                onsubmit="return confirm('Supprimer ce collaborateur et toutes ses données liées ?');">
             <button class="btn danger">Supprimer</button>
           </form>
         </td>
@@ -41,4 +48,14 @@
     </table>
   </div>
 </div>
+
+<script>
+function copyAccessLink(link){
+  navigator.clipboard.writeText(link).then(()=>{
+    alert("Lien d'accès copié. Envoyez-le au collaborateur.");
+  }).catch(()=>{
+    window.prompt("Copiez ce lien :", link);
+  });
+}
+</script>
 {% endblock %}
