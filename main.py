@@ -54,6 +54,8 @@ class Collaborateur(Base):
     prenom=Column(String(120),nullable=False)
     email=Column(String(180),unique=True,nullable=False)
     token=Column(String(96),nullable=False,default=lambda: secrets.token_hex(24))
+    password_hash=Column(String(255),nullable=True)
+    must_change_password=Column(Boolean,default=True,nullable=False)
     fonction=Column(String(180))
     departement_id=Column(Integer,ForeignKey("departements.id"))
     actif=Column(Boolean,default=True)
@@ -156,6 +158,21 @@ class AuditLog(Base):
     created_at=Column(DateTime,default=datetime.utcnow)
 
 Base.metadata.create_all(bind=engine)
+
+def ensure_runtime_schema():
+    """Ajoute les colonnes nécessaires sans supprimer les données existantes."""
+    with engine.begin() as conn:
+        if engine.url.get_backend_name() == "postgresql":
+            conn.execute(text("ALTER TABLE collaborateurs ADD COLUMN IF NOT EXISTS password_hash VARCHAR(255)"))
+            conn.execute(text("ALTER TABLE collaborateurs ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT TRUE"))
+        else:
+            cols={row[1] for row in conn.execute(text("PRAGMA table_info(collaborateurs)"))}
+            if "password_hash" not in cols:
+                conn.execute(text("ALTER TABLE collaborateurs ADD COLUMN password_hash VARCHAR(255)"))
+            if "must_change_password" not in cols:
+                conn.execute(text("ALTER TABLE collaborateurs ADD COLUMN must_change_password BOOLEAN NOT NULL DEFAULT 1"))
+
+ensure_runtime_schema()
 
 app=FastAPI(title="FIRSI - UM6P",version="5.0")
 app.add_middleware(SessionMiddleware,secret_key=os.getenv("SECRET_KEY","firsi-local-change-me"),same_site="lax",https_only=os.getenv("ENVIRONMENT")=="production",max_age=28800)
@@ -270,30 +287,60 @@ def staff_login(request:Request,username:str=Form(...),password:str=Form(...),db
     request.session.clear();request.session.update({"user_id":u.id,"role":u.role,"name":u.fullname})
     return RedirectResponse("/change-password" if u.must_change_password else "/dashboard",303)
 
-@app.post("/auth/otp/request")
-def otp_request(request:Request,email:str=Form(...),db:Session=Depends(get_db)):
-    email=email.strip().lower();c=db.query(Collaborateur).filter_by(email=email,actif=True).first()
-    if not c:return RedirectResponse("/?error=email",303)
-    code="".join(secrets.choice(string.digits) for _ in range(6))
-    db.query(OTPCode).filter_by(email=email,used=False).update({"used":True})
-    db.add(OTPCode(email=email,code_hash=hash_password(code),expires_at=datetime.utcnow()+timedelta(minutes=10)));db.commit()
-    sent,_=send_email(email,"Code de connexion FIRSI - UM6P",f"Votre code est : {code}\nValable 10 minutes.")
-    request.session["otp_email"]=email
-    if not sent and os.getenv("ENVIRONMENT")!="production":request.session["dev_otp"]=code
-    return RedirectResponse("/otp",303)
 
-@app.get("/otp")
-def otp_page(request:Request):
-    if not request.session.get("otp_email"):return RedirectResponse("/",303)
-    return templates.TemplateResponse("otp.html",{"request":request,"email":request.session["otp_email"],"dev_otp":request.session.get("dev_otp")})
+@app.post("/auth/collaborateur")
+def collaborator_login(
+    request:Request,
+    email:str=Form(...),
+    password:str=Form(...),
+    db:Session=Depends(get_db),
+):
+    clean_email=email.strip().lower()
+    collaborateur=db.query(Collaborateur).filter(
+        func.lower(Collaborateur.email)==clean_email,
+        Collaborateur.actif.is_(True)
+    ).first()
+    if not collaborateur or not collaborateur.password_hash or not verify_password(password,collaborateur.password_hash):
+        return RedirectResponse("/?error=collaborateur",303)
 
-@app.post("/auth/otp/verify")
-def otp_verify(request:Request,code:str=Form(...),db:Session=Depends(get_db)):
-    email=request.session.get("otp_email")
-    otp=db.query(OTPCode).filter(OTPCode.email==email,OTPCode.used.is_(False),OTPCode.expires_at>datetime.utcnow()).order_by(OTPCode.id.desc()).first()
-    if not otp or not verify_password(code.strip(),otp.code_hash):return RedirectResponse("/otp?error=1",303)
-    otp.used=True;c=db.query(Collaborateur).filter_by(email=email).first();db.commit()
-    request.session.clear();request.session.update({"role":"COLLABORATEUR","collaborateur_id":c.id,"name":f"{c.prenom} {c.nom}"});return RedirectResponse("/mon-espace",303)
+    request.session.clear()
+    request.session.update({
+        "role":"COLLABORATEUR",
+        "collaborateur_id":collaborateur.id,
+        "name":f"{collaborateur.prenom} {collaborateur.nom}",
+    })
+    if collaborateur.must_change_password:
+        return RedirectResponse("/collaborateur/change-password",303)
+    return RedirectResponse("/mon-espace",303)
+
+@app.get("/collaborateur/change-password")
+def collaborator_change_password_page(request:Request):
+    if request.session.get("role")!="COLLABORATEUR":
+        return RedirectResponse("/",303)
+    return templates.TemplateResponse("collaborator_change_password.html",{
+        "request":request,
+        "error":request.query_params.get("error"),
+    })
+
+@app.post("/collaborateur/change-password")
+def collaborator_change_password(
+    request:Request,
+    new_password:str=Form(...),
+    confirm_password:str=Form(...),
+    db:Session=Depends(get_db),
+):
+    if request.session.get("role")!="COLLABORATEUR":
+        return RedirectResponse("/",303)
+    if len(new_password)<8 or new_password!=confirm_password:
+        return RedirectResponse("/collaborateur/change-password?error=1",303)
+    collaborateur=db.get(Collaborateur,request.session.get("collaborateur_id"))
+    if not collaborateur:
+        request.session.clear()
+        return RedirectResponse("/",303)
+    collaborateur.password_hash=hash_password(new_password)
+    collaborateur.must_change_password=False
+    db.commit()
+    return RedirectResponse("/mon-espace?password=changed",303)
 
 @app.get("/change-password")
 def change_password_page(request:Request):
@@ -453,7 +500,7 @@ def collabs_page(request:Request,db:Session=Depends(get_db)):
     })
 
 @app.post("/collaborateurs")
-def create_collab(request:Request,nom:str=Form(...),prenom:str=Form(...),email:str=Form(...),fonction:str=Form(""),departement_id:int|None=Form(None),db:Session=Depends(get_db)):
+def create_collab(request:Request,nom:str=Form(...),prenom:str=Form(...),email:str=Form(...),temporary_password:str=Form(...),fonction:str=Form(""),departement_id:int|None=Form(None),db:Session=Depends(get_db)):
     if not require_staff(request):return RedirectResponse("/",303)
     clean_email=email.strip().lower()
     if db.query(Collaborateur).filter(func.lower(Collaborateur.email)==clean_email).first():
@@ -466,6 +513,8 @@ def create_collab(request:Request,nom:str=Form(...),prenom:str=Form(...),email:s
             prenom=prenom.strip(),
             email=clean_email,
             token=secrets.token_hex(24),
+            password_hash=hash_password(temporary_password),
+            must_change_password=True,
             fonction=fonction.strip() or None,
             departement_id=departement_id
         ))
@@ -559,7 +608,7 @@ def create_assignment(request:Request,collaborateur_id:int=Form(...),session_id:
                 f"Bonjour {a.collaborateur.prenom},\n\n"
                 f"Merci d’évaluer : {a.session.titre}.\n"
                 f"Accédez à la plateforme : {link}\n"
-                f"Puis connectez-vous avec votre adresse e-mail professionnelle."
+                f"Connectez-vous avec votre adresse e-mail et le mot de passe temporaire communiqué par la RH."
             )
             a.invitation_envoyee=sent;db.commit()
             return RedirectResponse(
@@ -580,7 +629,7 @@ def invite(aid:int,request:Request,db:Session=Depends(get_db)):
         f"Bonjour {a.collaborateur.prenom},\n\n"
         f"Merci de compléter l’évaluation de : {a.session.titre}.\n"
         f"Accédez à la plateforme : {link}\n"
-        f"Puis connectez-vous avec votre adresse e-mail professionnelle."
+        f"Connectez-vous avec votre adresse e-mail et le mot de passe temporaire communiqué par la RH."
     )
     a.invitation_envoyee=sent;db.commit()
     return RedirectResponse(

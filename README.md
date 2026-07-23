@@ -40,3 +40,7 @@ SMTP_FROM
 
 Logo :
 L’interface utilise l’identité texte FIRSI — UM6P. Le vrai fichier du logo officiel n’a pas été fourni.
+
+
+## Accès collaborateur
+La RH crée le collaborateur avec un mot de passe temporaire. À la première connexion, le collaborateur doit définir son propre mot de passe.
