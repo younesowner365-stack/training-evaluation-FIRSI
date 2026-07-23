@@ -39,3 +39,83 @@ table{width:100%;border-collapse:collapse;background:#fff}th,td{padding:12px;bor
 .kpi-highlight{border-color:#c7d7fe;background:linear-gradient(180deg,#ffffff,#f5f8ff)}
 .kpi-highlight strong{color:#2447d8}
 .metric-note{font-size:13px;color:#667085;line-height:1.5;margin:14px 0 0}
+
+
+/* ===== FIRSI V3 PREMIUM DASHBOARD ===== */
+.exec-hero{
+  display:flex;justify-content:space-between;align-items:flex-end;gap:24px;
+  padding:28px 30px;border-radius:22px;
+  background:linear-gradient(135deg,#0c1f4a 0%,#173a78 100%);
+  color:#fff;margin-bottom:20px;box-shadow:0 18px 40px rgba(12,31,74,.18)
+}
+.exec-hero h1{margin:6px 0 8px;font-size:32px;line-height:1.1;color:#fff}
+.exec-hero p{margin:0;color:rgba(255,255,255,.78);max-width:760px}
+.exec-eyebrow{font-size:11px;letter-spacing:.12em;font-weight:800;color:#5f6fff}
+.exec-hero .exec-eyebrow{color:#b7c6ff}
+.exec-actions{display:flex;gap:10px;flex-wrap:wrap}
+.btn-light{background:#fff!important;color:#173a78!important;border:1px solid rgba(255,255,255,.4)!important}
+
+.kpi-primary-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;margin-bottom:16px}
+.exec-kpi{
+  display:flex;gap:14px;align-items:center;background:#fff;border:1px solid #e4e7ec;border-radius:18px;
+  padding:20px;box-shadow:0 8px 24px rgba(16,24,40,.06);transition:.2s ease
+}
+.exec-kpi:hover{transform:translateY(-2px);box-shadow:0 14px 32px rgba(16,24,40,.1)}
+.exec-kpi-icon{width:48px;height:48px;border-radius:14px;background:#eef2ff;display:flex;align-items:center;justify-content:center;font-size:22px}
+.exec-kpi span{display:block;color:#667085;font-size:13px;font-weight:700}
+.exec-kpi strong{display:block;font-size:30px;line-height:1.05;color:#101828;margin:3px 0}
+.exec-kpi small{color:#98a2b3;font-size:12px}
+.exec-kpi-accent{border-color:#c7d7fe;background:linear-gradient(180deg,#fff,#f7f9ff)}
+.exec-kpi-success{border-color:#abefc6;background:linear-gradient(180deg,#fff,#f6fef9)}
+.exec-kpi-gold{border-color:#fedf89;background:linear-gradient(180deg,#fff,#fffcf5)}
+
+.kpi-secondary-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;margin-bottom:20px}
+.mini-kpi{background:#fff;border:1px solid #e4e7ec;border-radius:14px;padding:16px 18px;display:flex;justify-content:space-between;align-items:center}
+.mini-kpi span{color:#667085;font-size:13px;font-weight:700}.mini-kpi strong{font-size:22px;color:#101828}
+.mini-kpi-warning{background:#fffcf5;border-color:#fedf89}
+
+.exec-grid-2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;margin-bottom:20px}
+.panel-card{background:#fff;border:1px solid #e4e7ec;border-radius:18px;padding:22px;box-shadow:0 8px 24px rgba(16,24,40,.05)}
+.panel-heading{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:18px}
+.panel-heading h2{margin:5px 0 0;font-size:20px;color:#101828}.panel-value{font-size:30px;color:#2447d8}
+.panel-link{font-size:13px;font-weight:700;text-decoration:none;color:#2447d8}
+.progress-shell{padding:10px 0}.progress-track{height:12px;background:#eef2f6;border-radius:999px;overflow:hidden}
+.progress-track span{display:block;height:100%;border-radius:999px;background:linear-gradient(90deg,#3b5bfd,#6f85ff)}
+.progress-success .progress-track span{background:linear-gradient(90deg,#12b76a,#56d89d)}
+.progress-labels{display:flex;justify-content:space-between;color:#667085;font-size:12px;margin-top:8px}
+.insight-box{margin-top:18px;background:#f8fafc;border-radius:14px;padding:14px 16px}
+.insight-box strong{font-size:13px;color:#344054}.insight-box p{font-size:12px;color:#667085;margin:5px 0 0;line-height:1.5}
+
+.section-block{margin:8px 0 20px}.section-heading{display:flex;justify-content:space-between;align-items:end;margin-bottom:14px}
+.section-heading h2{margin:5px 0 0;font-size:22px}
+.theme-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
+.theme-premium-card{background:#fff;border:1px solid #e4e7ec;border-radius:18px;padding:18px;box-shadow:0 8px 24px rgba(16,24,40,.04)}
+.theme-premium-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
+.theme-premium-head>div{display:flex;align-items:center;gap:9px}.theme-marker{width:9px;height:9px;border-radius:50%;background:#5f6fff}
+.rating-badge{display:inline-flex;align-items:center;padding:5px 9px;border-radius:999px;background:#eef2ff;color:#2447d8;font-size:12px;font-weight:800}
+.theme-stat-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px}
+.theme-stat-grid div{background:#f8fafc;border-radius:12px;padding:12px}
+.theme-stat-grid span{display:block;color:#667085;font-size:11px}.theme-stat-grid strong{display:block;font-size:18px;color:#101828;margin-top:3px}
+.score-line{height:6px;background:#eef2f6;border-radius:999px;overflow:hidden}.score-line span{display:block;height:100%;background:linear-gradient(90deg,#5f6fff,#8ea0ff)}
+
+.rank-list{display:flex;flex-direction:column;gap:10px}.rank-item{display:flex;align-items:center;gap:12px;padding:12px;border-radius:14px;background:#f8fafc}
+.rank-index{width:28px;height:28px;border-radius:9px;background:#e9edff;color:#2447d8;display:flex;align-items:center;justify-content:center;font-weight:800}
+.rank-main{flex:1}.rank-main strong{display:block;font-size:13px}.rank-main span{display:block;font-size:11px;color:#667085;margin-top:2px}
+.pending-list{display:flex;flex-direction:column;gap:10px}.pending-item{display:flex;justify-content:space-between;align-items:center;padding:12px;border-radius:14px;background:#f8fafc}
+.pending-item strong{display:block;font-size:13px}.pending-item span{font-size:11px;color:#667085}
+.status-warning{padding:5px 9px;border-radius:999px;background:#fff4e5;color:#b54708!important;font-weight:800}
+.empty-state{padding:28px;text-align:center;color:#98a2b3;background:#f8fafc;border-radius:14px}
+
+.executive-note{background:#0f1f46;color:#fff;border-radius:18px;padding:20px 22px;margin-top:20px}
+.executive-note h2{margin:5px 0 6px;color:#fff}.executive-note p{margin:0;color:rgba(255,255,255,.72);font-size:13px}
+
+@media (max-width:1200px){
+  .kpi-primary-grid,.kpi-secondary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .theme-grid{grid-template-columns:1fr}
+}
+@media (max-width:800px){
+  .exec-hero{align-items:flex-start;flex-direction:column;padding:22px}
+  .exec-hero h1{font-size:26px}
+  .kpi-primary-grid,.kpi-secondary-grid,.exec-grid-2{grid-template-columns:1fr}
+  .theme-stat-grid{grid-template-columns:1fr}
+}

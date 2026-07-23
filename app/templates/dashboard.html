@@ -1,151 +1,198 @@
 
 {% extends "base.html" %}
-{% block page_title %}Pilotage global{% endblock %}
+{% block page_title %}Tableau de bord exécutif{% endblock %}
 {% block content %}
 
-<div class="dashboard-hero">
+<section class="exec-hero">
   <div>
-    <span class="eyebrow">FIRSI — UM6P</span>
+    <span class="exec-eyebrow">FIRSI — UM6P · PILOTAGE STRATÉGIQUE</span>
     <h1>Tableau de bord exécutif</h1>
-    <p>Vue globale et confidentielle du développement des compétences et des évaluations.</p>
+    <p>Vue globale, confidentielle et orientée décision des formations, événements et évaluations.</p>
   </div>
-  <div class="hero-actions">
-    <a class="btn secondary" href="/export/evaluations.xlsx">Exporter Excel</a>
+  <div class="exec-actions">
+    <a class="btn btn-light" href="/export/evaluations.xlsx">Exporter Excel</a>
     <a class="btn" href="/export/rapport.pdf">Rapport PDF</a>
   </div>
-</div>
+</section>
 
-<div class="grid grid-4">
-  <div class="card kpi-card">
-    <span>Collaborateurs actifs</span>
-    <strong>{{ kpis.collaborateurs }}</strong>
-    <small>effectif pris en compte</small>
-  </div>
+<section class="kpi-primary-grid">
+  <article class="exec-kpi">
+    <div class="exec-kpi-icon">👥</div>
+    <div>
+      <span>Collaborateurs actifs</span>
+      <strong>{{ kpis.collaborateurs }}</strong>
+      <small>Effectif de référence</small>
+    </div>
+  </article>
 
-  <div class="card kpi-card">
-    <span>Collaborateurs formés</span>
-    <strong>{{ kpis.collaborateurs_formes }}</strong>
-    <small>au moins une formation affectée</small>
-  </div>
+  <article class="exec-kpi exec-kpi-accent">
+    <div class="exec-kpi-icon">📚</div>
+    <div>
+      <span>Taux de couverture</span>
+      <strong>{{ kpis.couverture }}%</strong>
+      <small>{{ kpis.collaborateurs_formes }} collaborateur(s) formé(s)</small>
+    </div>
+  </article>
 
-  <div class="card kpi-card kpi-highlight">
-    <span>Taux de couverture</span>
-    <strong>{{ kpis.couverture }}%</strong>
-    <small>formés ÷ collaborateurs actifs</small>
-  </div>
+  <article class="exec-kpi exec-kpi-success">
+    <div class="exec-kpi-icon">📝</div>
+    <div>
+      <span>Taux de participation</span>
+      <strong>{{ kpis.participation }}%</strong>
+      <small>{{ kpis.recues }} réponse(s) reçue(s)</small>
+    </div>
+  </article>
 
-  <div class="card kpi-card kpi-highlight">
-    <span>Taux de participation</span>
-    <strong>{{ kpis.participation }}%</strong>
-    <small>réponses ÷ personnes affectées</small>
-  </div>
+  <article class="exec-kpi exec-kpi-gold">
+    <div class="exec-kpi-icon">⭐</div>
+    <div>
+      <span>Satisfaction globale</span>
+      <strong>{{ kpis.satisfaction }}/5</strong>
+      <small>Moyenne des évaluations</small>
+    </div>
+  </article>
+</section>
 
-  <div class="card kpi-card">
+<section class="kpi-secondary-grid">
+  <article class="mini-kpi">
     <span>Sessions actives</span>
     <strong>{{ kpis.sessions }}</strong>
-    <small>toutes thématiques</small>
-  </div>
-
-  <div class="card kpi-card">
+  </article>
+  <article class="mini-kpi">
+    <span>Affectations</span>
+    <strong>{{ kpis.affectations }}</strong>
+  </article>
+  <article class="mini-kpi">
     <span>Réponses reçues</span>
     <strong>{{ kpis.recues }}</strong>
-    <small>questionnaires complétés</small>
-  </div>
-
-  <div class="card kpi-card warning">
+  </article>
+  <article class="mini-kpi mini-kpi-warning">
     <span>Réponses en attente</span>
     <strong>{{ kpis.attente }}</strong>
-    <small>collaborateurs à relancer</small>
-  </div>
+  </article>
+</section>
 
-  <div class="card kpi-card">
-    <span>Satisfaction globale</span>
-    <strong>{{ kpis.satisfaction }}/5</strong>
-    <small>moyenne des évaluations</small>
-  </div>
-</div>
-
-<div class="grid grid-2 dashboard-row">
-  <div class="card chart-card">
-    <div class="card-title">
+<section class="exec-grid-2">
+  <article class="panel-card">
+    <div class="panel-heading">
       <div>
-        <span class="eyebrow">COUVERTURE DES FORMATIONS</span>
-        <h3>Collaborateurs formés / non formés</h3>
+        <span class="exec-eyebrow">COUVERTURE DES FORMATIONS</span>
+        <h2>Collaborateurs formés</h2>
+      </div>
+      <strong class="panel-value">{{ kpis.couverture }}%</strong>
+    </div>
+
+    <div class="progress-shell">
+      <div class="progress-track">
+        <span style="width: {{ kpis.couverture }}%"></span>
+      </div>
+      <div class="progress-labels">
+        <span>{{ kpis.collaborateurs_formes }} formé(s)</span>
+        <span>{{ kpis.non_formes }} non formé(s)</span>
       </div>
     </div>
-    <div class="chart-wrap"><canvas id="coverageChart"></canvas></div>
-    <p class="metric-note">
-      Cet indicateur exclut les collaborateurs inactifs et compte une seule fois
-      chaque personne ayant bénéficié d'au moins une formation.
-    </p>
-  </div>
 
-  <div class="card chart-card">
-    <div class="card-title">
+    <div class="insight-box">
+      <strong>Lecture de l’indicateur</strong>
+      <p>Part des collaborateurs actifs ayant bénéficié d’au moins une session de catégorie « Formation ».</p>
+    </div>
+  </article>
+
+  <article class="panel-card">
+    <div class="panel-heading">
       <div>
-        <span class="eyebrow">PARTICIPATION AUX ÉVALUATIONS</span>
-        <h3>Réponses reçues / réponses en attente</h3>
+        <span class="exec-eyebrow">PARTICIPATION AUX ÉVALUATIONS</span>
+        <h2>Questionnaires complétés</h2>
+      </div>
+      <strong class="panel-value">{{ kpis.participation }}%</strong>
+    </div>
+
+    <div class="progress-shell progress-success">
+      <div class="progress-track">
+        <span style="width: {{ kpis.participation }}%"></span>
+      </div>
+      <div class="progress-labels">
+        <span>{{ kpis.recues }} reçu(s)</span>
+        <span>{{ kpis.attente }} en attente</span>
       </div>
     </div>
-    <div class="chart-wrap"><canvas id="participationChart"></canvas></div>
-    <p class="metric-note">
-      Seules les personnes affectées à une session sont incluses dans le calcul.
-    </p>
-  </div>
-</div>
 
-<div class="section-title">
-  <div>
-    <span class="eyebrow">ANALYSE PAR THÉMATIQUE</span>
-    <h2>Questions, réponses et satisfaction</h2>
-  </div>
-</div>
+    <div class="insight-box">
+      <strong>Lecture de l’indicateur</strong>
+      <p>Part des personnes affectées à une session ayant effectivement soumis leur questionnaire.</p>
+    </div>
+  </article>
+</section>
 
-<div class="grid grid-3">
-{% for t in themes %}
-  <div class="card theme-card">
-    <div class="theme-head">
-      <div><span class="theme-dot"></span><strong>{{ t.nom }}</strong></div>
-      <span class="badge">{{ t.satisfaction }}/5</span>
-    </div>
-    <div class="theme-metrics">
-      <div><span>Questions</span><strong>{{ t.questions }}</strong></div>
-      <div><span>Réponses reçues</span><strong>{{ t.recues }}</strong></div>
-      <div><span>En attente</span><strong>{{ t.attente }}</strong></div>
-    </div>
-    <div class="progress">
-      <span style="width: {{ (t.satisfaction/5*100) if t.satisfaction else 0 }}%"></span>
+<section class="section-block">
+  <div class="section-heading">
+    <div>
+      <span class="exec-eyebrow">PERFORMANCE PAR THÉMATIQUE</span>
+      <h2>Questions, participation et satisfaction</h2>
     </div>
   </div>
-{% endfor %}
-</div>
 
-<div class="grid grid-2 dashboard-row">
-  <div class="card">
-    <div class="card-title">
-      <div><span class="eyebrow">PERFORMANCE</span><h3>Top des sessions</h3></div>
+  <div class="theme-grid">
+    {% for t in themes %}
+    <article class="theme-premium-card">
+      <div class="theme-premium-head">
+        <div>
+          <span class="theme-marker"></span>
+          <strong>{{ t.nom }}</strong>
+        </div>
+        <span class="rating-badge">{{ t.satisfaction }}/5</span>
+      </div>
+
+      <div class="theme-stat-grid">
+        <div><span>Questions</span><strong>{{ t.questions }}</strong></div>
+        <div><span>Réponses</span><strong>{{ t.recues }}</strong></div>
+        <div><span>En attente</span><strong>{{ t.attente }}</strong></div>
+      </div>
+
+      <div class="score-line">
+        <span style="width: {{ (t.satisfaction / 5 * 100) if t.satisfaction else 0 }}%"></span>
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="exec-grid-2">
+  <article class="panel-card">
+    <div class="panel-heading">
+      <div>
+        <span class="exec-eyebrow">PERFORMANCE</span>
+        <h2>Top des sessions</h2>
+      </div>
     </div>
+
     {% if top_sessions %}
-    <table class="compact-table">
-      <tr><th>Session</th><th>Réponses</th><th>Satisfaction</th></tr>
+    <div class="rank-list">
       {% for s in top_sessions %}
-      <tr>
-        <td>{{ s[0] }}</td>
-        <td>{{ s[2] }}</td>
-        <td><span class="score-pill">{{ "%.1f"|format(s[1]) }}/5</span></td>
-      </tr>
+      <div class="rank-item">
+        <div class="rank-index">{{ loop.index }}</div>
+        <div class="rank-main">
+          <strong>{{ s[0] }}</strong>
+          <span>{{ s[2] }} réponse(s)</span>
+        </div>
+        <span class="rating-badge">{{ "%.1f"|format(s[1]) }}/5</span>
+      </div>
       {% endfor %}
-    </table>
+    </div>
     {% else %}
     <div class="empty-state">Les meilleures sessions apparaîtront après les premières évaluations.</div>
     {% endif %}
-  </div>
+  </article>
 
-  <div class="card">
-    <div class="card-title">
-      <div><span class="eyebrow">À TRAITER</span><h3>Dernières réponses en attente</h3></div>
-      <a href="/affectations">Tout voir</a>
+  <article class="panel-card">
+    <div class="panel-heading">
+      <div>
+        <span class="exec-eyebrow">À TRAITER</span>
+        <h2>Réponses en attente</h2>
+      </div>
+      <a class="panel-link" href="/affectations">Tout voir</a>
     </div>
+
     {% if recent_pending %}
     <div class="pending-list">
       {% for a in recent_pending %}
@@ -161,36 +208,15 @@
     {% else %}
     <div class="empty-state">Aucune réponse en attente.</div>
     {% endif %}
+  </article>
+</section>
+
+<section class="executive-note">
+  <div>
+    <span class="exec-eyebrow">CONFIDENTIALITÉ</span>
+    <h2>Vue globale anonymisée</h2>
+    <p>Les départements ne sont pas affichés sur ce tableau de bord afin de préserver une lecture globale et confidentielle.</p>
   </div>
-</div>
+</section>
 
-<script>
-new Chart(document.getElementById('coverageChart'),{
-  type:'doughnut',
-  data:{
-    labels:['Collaborateurs formés','Collaborateurs non formés'],
-    datasets:[{data:[{{ kpis.collaborateurs_formes }},{{ kpis.non_formes }}]}]
-  },
-  options:{
-    responsive:true,
-    maintainAspectRatio:false,
-    cutout:'70%',
-    plugins:{legend:{position:'bottom'}}
-  }
-});
-
-new Chart(document.getElementById('participationChart'),{
-  type:'doughnut',
-  data:{
-    labels:['Réponses reçues','Réponses en attente'],
-    datasets:[{data:[{{ kpis.recues }},{{ kpis.attente }}]}]
-  },
-  options:{
-    responsive:true,
-    maintainAspectRatio:false,
-    cutout:'70%',
-    plugins:{legend:{position:'bottom'}}
-  }
-});
-</script>
 {% endblock %}
