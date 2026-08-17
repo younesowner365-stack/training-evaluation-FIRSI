@@ -283,7 +283,8 @@ def seed():
 seed()
 
 @app.get("/")
-def landing(request:Request):return templates.TemplateResponse("landing.html",{"request":request,"error":request.query_params.get("error")})
+def landing(request:Request):
+    return templates.TemplateResponse("landing.html",{"request":request,"error":request.query_params.get("error"),"email":request.query_params.get("email","")})
 
 @app.post("/auth/staff")
 def staff_login(request:Request,username:str=Form(...),password:str=Form(...),db:Session=Depends(get_db)):
@@ -419,7 +420,7 @@ def dashboard(request:Request,db:Session=Depends(get_db)):
         assigned=(
             db.query(Affectation)
             .join(SessionFormation,Affectation.session_id==SessionFormation.id)
-            .filter(SessionFormation.categorie_id==cat.id)
+            .filter(SessionFormation.categorie_id==cat.id,Affectation.beneficie.is_(True))
             .count()
         )
         avg_score=(
@@ -450,7 +451,7 @@ def dashboard(request:Request,db:Session=Depends(get_db)):
 
     recent_pending=(
         db.query(Affectation)
-        .filter(Affectation.statut!="Évaluée")
+        .filter(Affectation.beneficie.is_(True),Affectation.statut!="Évaluée")
         .order_by(Affectation.created_at.desc())
         .limit(5).all()
     )
@@ -585,6 +586,7 @@ def reset_collaborateur_password(
     try:
         c.password_hash=hash_password(temporary_password)
         c.must_change_password=True
+        c.token=secrets.token_hex(24)
         db.commit()
         audit(db,request,"Réinitialisation mot de passe collaborateur",f"{c.prenom} {c.nom}")
         return RedirectResponse("/collaborateurs?message=mot_de_passe_reinitialise",303)
@@ -667,7 +669,7 @@ def assignments_page(request:Request,db:Session=Depends(get_db)):
 def create_assignment(request:Request,collaborateur_id:int=Form(...),session_id:int=Form(...),envoyer_invitation:str=Form("non"),db:Session=Depends(get_db)):
     if not require_staff(request):return RedirectResponse("/",303)
     if not db.query(Affectation).filter_by(collaborateur_id=collaborateur_id,session_id=session_id).first():
-        a=Affectation(collaborateur_id=collaborateur_id,session_id=session_id);db.add(a);db.commit();db.refresh(a)
+        a=Affectation(collaborateur_id=collaborateur_id,session_id=session_id,statut="Confirmation requise",beneficie=None);db.add(a);db.commit();db.refresh(a)
         if envoyer_invitation=="oui":
             link=invitation_link(request,a.id)
             sent,_=send_email(
@@ -684,6 +686,20 @@ def create_assignment(request:Request,collaborateur_id:int=Form(...),session_id:
                 303
             )
     return RedirectResponse("/affectations?message=affectation_ajoutee",303)
+
+@app.post("/affectations/bulk")
+def bulk_assign(request:Request,session_id:int=Form(...),collaborateur_ids:list[int]=Form(...),db:Session=Depends(get_db)):
+    if not require_staff(request):return RedirectResponse("/",303)
+    session=db.get(SessionFormation,session_id)
+    if not session:return RedirectResponse("/affectations?error=session_introuvable",303)
+    created=0
+    for cid in collaborateur_ids:
+        c=db.get(Collaborateur,cid)
+        if not c or not c.actif:continue
+        if db.query(Affectation).filter_by(collaborateur_id=cid,session_id=session_id).first():continue
+        db.add(Affectation(collaborateur_id=cid,session_id=session_id,statut="Confirmation requise",beneficie=None));created+=1
+    db.commit();audit(db,request,"Affectation en masse",f"{created} collaborateur(s) - {session.titre}")
+    return RedirectResponse(f"/affectations?message=affectation_masse&created={created}",303)
 
 @app.post("/affectations/{aid}/invite")
 def invite(aid:int,request:Request,db:Session=Depends(get_db)):
@@ -724,19 +740,10 @@ def delete_affectation(aid:int,request:Request,db:Session=Depends(get_db)):
 
 @app.get("/acces/{token}")
 def access_by_token(token:str,request:Request,db:Session=Depends(get_db)):
-    collaborateur=db.query(Collaborateur).filter(
-        Collaborateur.token==token,
-        Collaborateur.actif.is_(True)
-    ).first()
-    if not collaborateur:
-        return RedirectResponse("/?error=lien_invalide",303)
-    request.session.clear()
-    request.session.update({
-        "role":"COLLABORATEUR",
-        "collaborateur_id":collaborateur.id,
-        "name":f"{collaborateur.prenom} {collaborateur.nom}"
-    })
-    return RedirectResponse("/mon-espace",303)
+    collaborateur=db.query(Collaborateur).filter(Collaborateur.token==token,Collaborateur.actif.is_(True)).first()
+    if not collaborateur:return RedirectResponse("/?error=lien_invalide",303)
+    from urllib.parse import quote
+    return RedirectResponse(f"/?email={quote(collaborateur.email)}",303)
 
 @app.get("/mon-espace")
 def collaborator_space(request:Request,db:Session=Depends(get_db)):
@@ -744,17 +751,32 @@ def collaborator_space(request:Request,db:Session=Depends(get_db)):
     if request.session.get("role")!="COLLABORATEUR" or not cid:return RedirectResponse("/",303)
     c=db.get(Collaborateur,cid);return templates.TemplateResponse("collaborator_space.html",{"request":request,"collaborateur":c,"affectations":c.affectations})
 
+@app.post("/mon-espace/affectations/{aid}/participation")
+def confirm_participation(aid:int,request:Request,beneficie:str=Form(...),db:Session=Depends(get_db)):
+    cid=request.session.get("collaborateur_id")
+    if request.session.get("role")!="COLLABORATEUR" or not cid:return RedirectResponse("/",303)
+    a=db.query(Affectation).filter(Affectation.id==aid,Affectation.collaborateur_id==cid).first()
+    if not a:return RedirectResponse("/mon-espace?error=affectation_introuvable",303)
+    if a.reponse:return RedirectResponse("/mon-espace?already=1",303)
+    choix=beneficie.strip().lower()
+    if choix=="non":a.beneficie=False;a.statut="Non bénéficié";db.commit();return RedirectResponse("/mon-espace?participation=non",303)
+    if choix=="oui":a.beneficie=True;a.statut="À évaluer";db.commit();return RedirectResponse(f"/mon-espace/evaluer/{a.id}",303)
+    return RedirectResponse("/mon-espace?error=choix_invalide",303)
+
 @app.get("/mon-espace/evaluer/{aid}")
 def evaluation_form(aid:int,request:Request,db:Session=Depends(get_db)):
     a=db.get(Affectation,aid)
     if request.session.get("role")!="COLLABORATEUR" or not a or a.collaborateur_id!=request.session.get("collaborateur_id"):raise HTTPException(403)
     if a.reponse:return RedirectResponse("/mon-espace?already=1",303)
-    return templates.TemplateResponse("evaluation_form.html",{"request":request,"affectation":a,"questions":a.session.questionnaire.questions})
+    if a.beneficie is not True:return RedirectResponse("/mon-espace?error=participation_requise",303)
+    return templates.TemplateResponse("evaluation_form.html",{"request":request,"affectation":a,"questions":a.session.questionnaire.questions,"error":request.query_params.get("error")})
 
 @app.post("/mon-espace/evaluer/{aid}")
 async def submit_evaluation(aid:int,request:Request,db:Session=Depends(get_db)):
     a=db.get(Affectation,aid)
     if request.session.get("role")!="COLLABORATEUR" or not a or a.collaborateur_id!=request.session.get("collaborateur_id"):raise HTTPException(403)
+    if a.reponse:return RedirectResponse("/mon-espace?already=1",303)
+    if a.beneficie is not True:return RedirectResponse("/mon-espace?error=participation_requise",303)
     form=await request.form();scores=[];comments=[];recommend=False;values=[]
     for q in a.session.questionnaire.questions:
         v=str(form.get(f"q_{q.id}","")).strip()

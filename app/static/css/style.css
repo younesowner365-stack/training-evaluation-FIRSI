@@ -136,3 +136,4 @@ table{width:100%;border-collapse:collapse;background:#fff}th,td{padding:12px;bor
 .reset-password-box{margin-bottom:8px}.reset-password-box summary{cursor:pointer;color:#2447d8;font-weight:700;font-size:12px}
 .reset-password-box form{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}.reset-password-box input{min-width:220px}
 .reset-password-box small{display:block;color:#667085;margin-top:5px}
+.status-success{display:inline-block;padding:5px 9px;border-radius:999px;background:#ecfdf3;color:#027a48;font-size:12px;font-weight:800}.status-neutral-inline{display:inline-block;padding:5px 9px;border-radius:999px;background:#f2f4f7;color:#475467;font-size:12px;font-weight:800}.success-soft{margin:10px 0;padding:10px 12px;border-radius:10px;background:#ecfdf3;color:#027a48;font-size:13px;font-weight:700}.collaborator-session-card h3{margin-bottom:12px}
