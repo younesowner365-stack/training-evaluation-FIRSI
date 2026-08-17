@@ -1,8 +1,11 @@
 {% extends "base.html" %}
 {% block page_title %}Collaborateurs{% endblock %}
 {% block content %}
-{% if message %}<div class="success">Opération réalisée avec succès.</div>{% endif %}
+{% if message == 'mot_de_passe_reinitialise' %}<div class="success">Mot de passe temporaire créé. Le collaborateur devra le modifier à sa prochaine connexion.</div>
+{% elif message %}<div class="success">Opération réalisée avec succès.</div>{% endif %}
 {% if error == 'email_existant' %}<div class="error">Cette adresse e-mail existe déjà.</div>
+{% elif error == 'mot_de_passe_court' %}<div class="error">Le mot de passe temporaire doit contenir au moins 8 caractères.</div>
+{% elif error == 'reinitialisation_impossible' %}<div class="error">Impossible de réinitialiser le mot de passe.</div>
 {% elif error %}<div class="error">Impossible d’effectuer cette opération.</div>{% endif %}
 
 <div class="grid grid-2">

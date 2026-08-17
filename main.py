@@ -567,6 +567,32 @@ def create_collab(request:Request,nom:str=Form(...),prenom:str=Form(...),email:s
         db.rollback()
         return RedirectResponse("/collaborateurs?error=donnees_dupliquees",303)
 
+@app.post("/collaborateurs/{cid}/reset-password")
+def reset_collaborateur_password(
+    cid:int,
+    request:Request,
+    temporary_password:str=Form(...),
+    db:Session=Depends(get_db)
+):
+    if not require_staff(request):
+        return RedirectResponse("/",303)
+    c=db.get(Collaborateur,cid)
+    if not c:
+        return RedirectResponse("/collaborateurs?error=introuvable",303)
+    temporary_password=temporary_password.strip()
+    if len(temporary_password)<8:
+        return RedirectResponse("/collaborateurs?error=mot_de_passe_court",303)
+    try:
+        c.password_hash=hash_password(temporary_password)
+        c.must_change_password=True
+        db.commit()
+        audit(db,request,"Réinitialisation mot de passe collaborateur",f"{c.prenom} {c.nom}")
+        return RedirectResponse("/collaborateurs?message=mot_de_passe_reinitialise",303)
+    except Exception as exc:
+        db.rollback()
+        print(f"[RESET PASSWORD COLLABORATEUR] {exc}",flush=True)
+        return RedirectResponse("/collaborateurs?error=reinitialisation_impossible",303)
+
 @app.post("/collaborateurs/{cid}/delete")
 def delete_collaborateur(cid:int,request:Request,db:Session=Depends(get_db)):
     if not require_staff(request):return RedirectResponse("/",303)
