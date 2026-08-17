@@ -38,6 +38,16 @@
           </button>
         </td>
         <td>
+          
+          <details class="reset-password-box">
+            <summary>Réinitialiser le mot de passe</summary>
+            <form method="post" action="/collaborateurs/{{ c.id }}/reset-password">
+              <input type="text" name="temporary_password" minlength="8" required placeholder="Nouveau mot de passe temporaire">
+              <button class="btn secondary" type="submit">Créer le mot de passe temporaire</button>
+            </form>
+            <small>Le collaborateur devra le modifier à sa prochaine connexion.</small>
+          </details>
+
           <form method="post" action="/collaborateurs/{{ c.id }}/delete"
                 onsubmit="return confirm('Supprimer ce collaborateur et toutes ses données liées ?');">
             <button class="btn danger">Supprimer</button>

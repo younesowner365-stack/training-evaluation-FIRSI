@@ -165,6 +165,7 @@ def ensure_runtime_schema():
         if engine.url.get_backend_name() == "postgresql":
             conn.execute(text("ALTER TABLE collaborateurs ADD COLUMN IF NOT EXISTS password_hash VARCHAR(255)"))
             conn.execute(text("ALTER TABLE collaborateurs ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT TRUE"))
+            conn.execute(text("ALTER TABLE affectations ADD COLUMN IF NOT EXISTS beneficie BOOLEAN"))
         else:
             cols={row[1] for row in conn.execute(text("PRAGMA table_info(collaborateurs)"))}
             if "password_hash" not in cols:
@@ -376,6 +377,7 @@ def dashboard(request:Request,db:Session=Depends(get_db)):
         .filter(
             func.lower(Categorie.nom)=="formation",
             Collaborateur.actif.is_(True),
+            Affectation.beneficie.is_(True),
         )
         .scalar()
     ) or 0
@@ -384,8 +386,11 @@ def dashboard(request:Request,db:Session=Depends(get_db)):
     ) if total_collaborateurs else 0
 
     # Taux de participation aux évaluations :
-    # réponses reçues / affectations créées.
-    taux_participation=round(total_rep/total_aff*100,1) if total_aff else 0
+    # réponses reçues / bénéficiaires confirmés.
+    total_beneficiaires=db.query(Affectation).filter(Affectation.beneficie.is_(True)).count()
+    total_non_beneficiaires=db.query(Affectation).filter(Affectation.beneficie.is_(False)).count()
+    total_confirmation_attente=db.query(Affectation).filter(Affectation.beneficie.is_(None)).count()
+    taux_participation=round(total_rep/total_beneficiaires*100,1) if total_beneficiaires else 0
 
     # Questions, réponses reçues et réponses en attente par thématique
     themes=[]
@@ -455,6 +460,9 @@ def dashboard(request:Request,db:Session=Depends(get_db)):
             "attente":pending,
             "recues":total_rep,
             "affectations":total_aff,
+            "beneficiaires":total_beneficiaires,
+            "non_beneficiaires":total_non_beneficiaires,
+            "confirmation_attente":total_confirmation_attente,
             "non_formes":max(total_collaborateurs-collaborateurs_formes,0),
         },
         "themes":themes,

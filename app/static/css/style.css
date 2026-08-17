@@ -119,3 +119,20 @@ table{width:100%;border-collapse:collapse;background:#fff}th,td{padding:12px;bor
   .kpi-primary-grid,.kpi-secondary-grid,.exec-grid-2{grid-template-columns:1fr}
   .theme-stat-grid{grid-template-columns:1fr}
 }
+
+/* ===== FIRSI V4 — affectations & bénéficiaires ===== */
+.bulk-assign-card{margin-bottom:18px}
+.bulk-toolbar{display:flex;justify-content:space-between;align-items:center;margin:14px 0 10px}
+.check-all{display:flex!important;align-items:center;gap:8px;font-weight:800}
+.check-all input,.bulk-person input{width:18px;height:18px}
+.bulk-list{max-height:320px;overflow:auto;border:1px solid #e4e7ec;border-radius:14px;margin-bottom:14px}
+.bulk-person{display:flex!important;gap:12px;align-items:center;padding:12px 14px;border-bottom:1px solid #eef2f6;cursor:pointer}
+.bulk-person:last-child{border-bottom:0}.bulk-person:hover{background:#f8fafc}
+.bulk-person strong{display:block}.bulk-person span{display:block;font-size:12px;color:#667085;margin-top:2px}
+.participation-question{margin-top:14px;padding:16px;border-radius:14px;background:#f7f9ff;border:1px solid #c7d7fe}
+.participation-question strong{display:block;color:#1d2939}.participation-question p{font-size:12px;color:#667085}
+.participation-actions{display:flex;gap:10px;flex-wrap:wrap}.participation-actions form{margin:0}
+.status-neutral{margin-top:12px;padding:10px 12px;border-radius:10px;background:#f2f4f7;color:#475467;font-size:13px;font-weight:700}
+.reset-password-box{margin-bottom:8px}.reset-password-box summary{cursor:pointer;color:#2447d8;font-weight:700;font-size:12px}
+.reset-password-box form{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}.reset-password-box input{min-width:220px}
+.reset-password-box small{display:block;color:#667085;margin-top:5px}

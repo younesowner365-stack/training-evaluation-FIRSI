@@ -1,6 +1,61 @@
 {% extends "base.html" %}
-{% block page_title %}Affectations & invitations{% endblock %}
+{% block page_title %}Affectations & invitations
+<script>
+(function(){
+  const all=document.getElementById('selectAllCollaborators');
+  const checks=[...document.querySelectorAll('.collab-check')];
+  const count=document.getElementById('selectedCount');
+  function refresh(){
+    const n=checks.filter(x=>x.checked).length;
+    if(count) count.textContent=n+" sélectionné"+(n>1?"s":"");
+    if(all) all.checked=checks.length>0 && n===checks.length;
+  }
+  if(all) all.addEventListener('change',()=>{checks.forEach(x=>x.checked=all.checked);refresh();});
+  checks.forEach(x=>x.addEventListener('change',refresh));
+  refresh();
+})();
+</script>
+
+{% endblock %}
 {% block content %}
+
+<div class="card bulk-assign-card">
+  <div class="panel-heading">
+    <div>
+      <span class="exec-eyebrow">AFFECTATION EN MASSE</span>
+      <h3>Affecter plusieurs collaborateurs</h3>
+    </div>
+  </div>
+  <form method="post" action="/affectations/bulk">
+    <label>Session / événement</label>
+    <select name="session_id" required>
+      {% for s in sessions %}<option value="{{ s.id }}">{{ s.titre }}</option>{% endfor %}
+    </select>
+
+    <div class="bulk-toolbar">
+      <label class="check-all">
+        <input type="checkbox" id="selectAllCollaborators">
+        <span>Tout sélectionner</span>
+      </label>
+      <span id="selectedCount" class="muted">0 sélectionné</span>
+    </div>
+
+    <div class="bulk-list">
+      {% for c in collaborateurs %}
+      <label class="bulk-person">
+        <input class="collab-check" type="checkbox" name="collaborateur_ids" value="{{ c.id }}">
+        <div>
+          <strong>{{ c.prenom }} {{ c.nom }}</strong>
+          <span>{{ c.email }}</span>
+        </div>
+      </label>
+      {% endfor %}
+    </div>
+
+    <button class="btn" type="submit">Affecter la sélection</button>
+  </form>
+</div>
+
 
 {% if mail_status == 'sent' %}
 <div class="success">Invitation envoyée avec succès.</div>

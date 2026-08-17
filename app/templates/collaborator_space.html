@@ -1,1 +1,19 @@
-{% extends "base.html" %}{% block public_content %}<div class="landing"><div class="landing-wrap"><div class="topbar"><div><h1>Bonjour {{ collaborateur.prenom }}</h1><p class="muted">Vos évaluations FIRSI - UM6P</p></div><a class="btn secondary" href="/logout">Déconnexion</a></div><div class="grid grid-3">{% for a in affectations %}<div class="card"><span class="badge">{{ a.session.categorie.nom }}</span><h3>{{ a.session.titre }}</h3>{% if a.reponse %}<div class="success">Évaluation envoyée</div>{% else %}<a class="btn" href="/mon-espace/evaluer/{{ a.id }}">Répondre</a>{% endif %}</div>{% endfor %}</div><div class="footer">© FIRSI - UM6P</div></div></div>{% endblock %}
+{% extends "base.html" %}{% block public_content %}<div class="landing"><div class="landing-wrap"><div class="topbar"><div><h1>Bonjour {{ collaborateur.prenom }}</h1><p class="muted">Vos évaluations FIRSI - UM6P</p></div><a class="btn secondary" href="/logout">Déconnexion</a></div><div class="grid grid-3">{% for a in affectations %}<div class="card"><span class="badge">{{ a.session.categorie.nom }}</span><h3>{{ a.session.titre }}
+          {% if a.beneficie is none %}
+          <div class="participation-question">
+            <strong>Avez-vous bénéficié / participé à cette activité ?</strong>
+            <p>Si vous répondez « Non », aucun questionnaire ne vous sera demandé pour cette activité.</p>
+            <div class="participation-actions">
+              <form method="post" action="/mon-espace/affectations/{{ a.id }}/participation">
+                <input type="hidden" name="beneficie" value="oui">
+                <button class="btn" type="submit">Oui, j’ai participé</button>
+              </form>
+              <form method="post" action="/mon-espace/affectations/{{ a.id }}/participation">
+                <input type="hidden" name="beneficie" value="non">
+                <button class="btn secondary" type="submit">Non, je n’ai pas participé</button>
+              </form>
+            </div>
+          </div>
+          {% elif a.beneficie == false %}
+          <div class="status-neutral">Non bénéficié — aucun questionnaire à compléter.</div>
+          {% endif %}</h3>{% if a.reponse %}<div class="success">Évaluation envoyée</div>{% else %}{% if a.beneficie == true %}<a class="btn" href="/mon-espace/evaluer/{{ a.id }}">Répondre</a>{% endif %}{% endif %}</div>{% endfor %}</div><div class="footer">© FIRSI - UM6P</div></div></div>{% endblock %}
