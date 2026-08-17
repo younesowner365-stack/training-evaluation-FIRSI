@@ -115,6 +115,7 @@ class Affectation(Base):
     session_id=Column(Integer,ForeignKey("sessions.id"),nullable=False)
     statut=Column(String(30),default="À évaluer")
     invitation_envoyee=Column(Boolean,default=False)
+    beneficie=Column(Boolean,nullable=True)
     created_at=Column(DateTime,default=datetime.utcnow)
     collaborateur=relationship("Collaborateur",back_populates="affectations")
     session=relationship("SessionFormation",back_populates="affectations")
@@ -172,6 +173,9 @@ def ensure_runtime_schema():
                 conn.execute(text("ALTER TABLE collaborateurs ADD COLUMN password_hash VARCHAR(255)"))
             if "must_change_password" not in cols:
                 conn.execute(text("ALTER TABLE collaborateurs ADD COLUMN must_change_password BOOLEAN NOT NULL DEFAULT 1"))
+            affect_cols={row[1] for row in conn.execute(text("PRAGMA table_info(affectations)"))}
+            if "beneficie" not in affect_cols:
+                conn.execute(text("ALTER TABLE affectations ADD COLUMN beneficie BOOLEAN"))
 
 ensure_runtime_schema()
 
@@ -363,7 +367,10 @@ def dashboard(request:Request,db:Session=Depends(get_db)):
     total_collaborateurs=db.query(Collaborateur).filter(Collaborateur.actif.is_(True)).count()
     total_aff=db.query(Affectation).count()
     total_rep=db.query(Reponse).count()
-    pending=max(total_aff-total_rep,0)
+    pending=max(
+        db.query(Affectation).filter(Affectation.beneficie.is_(True)).count()-total_rep,
+        0
+    )
     satisfaction=db.query(func.avg(Reponse.satisfaction_globale)).scalar() or 0
 
     # Taux de couverture des formations :
