@@ -1,1 +1,27 @@
-{% extends "base.html" %}{% block page_title %}Thématiques{% endblock %}{% block content %}<div class="grid grid-2"><div class="card"><h3>Ajouter une thématique</h3><form method="post"><label>Nom</label><input name="nom" required><label>Description</label><textarea name="description"></textarea><br><br><button class="btn">Ajouter</button></form></div><div class="card"><table><tr><th>Nom</th><th>Description</th></tr>{% for c in categories %}<tr><td>{{ c.nom }}</td><td>{{ c.description or '' }}</td></tr>{% endfor %}</table></div></div>{% endblock %}
+{% extends "base.html" %}
+{% block page_title %}Thématiques{% endblock %}
+{% block content %}
+<div class="grid grid-2">
+  <div class="card">
+    <h3>Ajouter une thématique</h3>
+    {% if message == 'ajoutee' %}<div class="success">Thématique ajoutée.</div>{% elif message == 'supprimee' %}<div class="success">Thématique supprimée avec ses questionnaires et questions associés.</div>{% elif error == 'existe' %}<div class="error">Cette thématique existe déjà.</div>{% elif error == 'utilisee' %}<div class="error">Cette thématique est utilisée par une ou plusieurs sessions. Elle ne peut pas être supprimée afin de protéger les évaluations existantes.</div>{% elif error %}<div class="error">Suppression impossible ou thématique introuvable.</div>{% endif %}
+    <form method="post" action="/categories">
+      <label>Nom</label><input name="nom" required>
+      <label>Description</label><textarea name="description"></textarea>
+      <br><br><button class="btn">Ajouter</button>
+    </form>
+  </div>
+  <div class="card">
+    <table><tr><th>Nom</th><th>Description</th><th>Action</th></tr>
+    {% for c in categories %}
+      <tr><td><strong>{{ c.nom }}</strong></td><td>{{ c.description or '' }}</td><td>
+        <form method="post" action="/categories/{{ c.id }}/delete" onsubmit="return confirm('Supprimer cette thématique et ses questionnaires/questions associés ?');">
+          <button class="btn danger" type="submit">Supprimer</button>
+        </form>
+      </td></tr>
+    {% endfor %}
+    </table>
+    <p class="muted">Une thématique utilisée par une session ne peut pas être supprimée : cela protège les évaluations déjà saisies.</p>
+  </div>
+</div>
+{% endblock %}

@@ -9,6 +9,7 @@
     <form method="post">
       <label>Titre</label><input name="titre" required>
       <label>Thématique</label><select name="categorie_id">{% for c in categories %}<option value="{{ c.id }}">{{ c.nom }}</option>{% endfor %}</select>
+      <label>Type de formation</label><select name="type_formation"><option>Certifiante</option><option>Diplômante</option><option selected>Qualifiante</option></select>
       <label>Questionnaire</label><select name="questionnaire_id">{% for q in questionnaires %}<option value="{{ q.id }}">{{ q.titre }}</option>{% endfor %}</select>
       <label>Date début</label><input type="date" name="date_debut">
       <label>Date fin</label><input type="date" name="date_fin">
@@ -20,11 +21,12 @@
   </div>
   <div class="card">
     <table>
-      <tr><th>Session</th><th>Thématique</th><th>Questionnaire</th><th>Action</th></tr>
+      <tr><th>Session</th><th>Thématique</th><th>Type</th><th>Questionnaire</th><th>Action</th></tr>
       {% for s in sessions %}
       <tr>
         <td>{{ s.titre }}</td>
         <td>{{ s.categorie.nom }}</td>
+        <td>{{ s.type_formation }}</td>
         <td>{{ s.questionnaire.titre }}</td>
         <td>
           <form method="post" action="/sessions/{{ s.id }}/delete" onsubmit="return confirm('Supprimer cette session et toutes ses affectations ?');">

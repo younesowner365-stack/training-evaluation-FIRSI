@@ -15,6 +15,18 @@ from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime
 from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship
 from sqlalchemy.exc import IntegrityError
 from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
+
+try:
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import mm
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
+except ImportError:
+    colors = None
 
 BASE_DIR = Path(__file__).resolve().parent
 SQLITE_URL = f"sqlite:///{BASE_DIR / 'evaluation.db'}"
@@ -105,6 +117,7 @@ class SessionFormation(Base):
     lieu=Column(String(255))
     animateur=Column(String(255))
     description=Column(Text)
+    type_formation=Column(String(50),nullable=True)
     active=Column(Boolean,default=True)
     categorie=relationship("Categorie")
     questionnaire=relationship("Questionnaire")
@@ -173,6 +186,7 @@ def ensure_runtime_schema():
             conn.execute(text("ALTER TABLE collaborateurs ADD COLUMN IF NOT EXISTS date_depart TIMESTAMP"))
             conn.execute(text("ALTER TABLE collaborateurs ADD COLUMN IF NOT EXISTS motif_depart VARCHAR(80)"))
             conn.execute(text("ALTER TABLE affectations ADD COLUMN IF NOT EXISTS beneficie BOOLEAN"))
+            conn.execute(text("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS type_formation VARCHAR(50)"))
         else:
             cols={row[1] for row in conn.execute(text("PRAGMA table_info(collaborateurs)"))}
             if "password_hash" not in cols:
@@ -188,6 +202,9 @@ def ensure_runtime_schema():
             affect_cols={row[1] for row in conn.execute(text("PRAGMA table_info(affectations)"))}
             if "beneficie" not in affect_cols:
                 conn.execute(text("ALTER TABLE affectations ADD COLUMN beneficie BOOLEAN"))
+            session_cols={row[1] for row in conn.execute(text("PRAGMA table_info(sessions)"))}
+            if "type_formation" not in session_cols:
+                conn.execute(text("ALTER TABLE sessions ADD COLUMN type_formation VARCHAR(50)"))
 
 ensure_runtime_schema()
 
@@ -460,6 +477,19 @@ def dashboard(request:Request,db:Session=Depends(get_db)):
             "satisfaction":round(float(avg_score),2),
         })
 
+    # Répartition des sessions de catégorie Formation par type de formation.
+    formation_types = []
+    for type_name in ["Certifiante", "Diplômante", "Qualifiante"]:
+        n = (db.query(SessionFormation)
+             .join(Categorie, SessionFormation.categorie_id == Categorie.id)
+             .filter(SessionFormation.active.is_(True), func.lower(Categorie.nom) == "formation",
+                     func.lower(SessionFormation.type_formation) == type_name.lower())
+             .count())
+        formation_types.append({"type": type_name, "count": n})
+    total_formation_types = sum(x["count"] for x in formation_types)
+    for x in formation_types:
+        x["pct"] = round(x["count"] / total_formation_types * 100, 1) if total_formation_types else 0
+
     deps=db.query(Departement.nom,func.count(Collaborateur.id)).outerjoin(Collaborateur).group_by(Departement.nom).all()
 
     top_sessions=(
@@ -498,6 +528,7 @@ def dashboard(request:Request,db:Session=Depends(get_db)):
             "departures":total_departures,
         },
         "themes":themes,
+        "formation_types":formation_types,
         "department_labels":[x[0] for x in deps],
         "department_values":[x[1] for x in deps],
         "top_sessions":top_sessions,
@@ -507,13 +538,45 @@ def dashboard(request:Request,db:Session=Depends(get_db)):
 @app.get("/categories")
 def categories_page(request:Request,db:Session=Depends(get_db)):
     if not require_staff(request):return RedirectResponse("/",303)
-    return templates.TemplateResponse("categories.html",{"request":request,"categories":db.query(Categorie).order_by(Categorie.nom).all()})
+    return templates.TemplateResponse("categories.html",{
+        "request":request,
+        "categories":db.query(Categorie).order_by(Categorie.nom).all(),
+        "message":request.query_params.get("message"),
+        "error":request.query_params.get("error")
+    })
 
 @app.post("/categories")
 def create_category(request:Request,nom:str=Form(...),description:str=Form(""),db:Session=Depends(get_db)):
     if not require_staff(request):return RedirectResponse("/",303)
-    if not db.query(Categorie).filter_by(nom=nom.strip()).first():db.add(Categorie(nom=nom.strip(),description=description.strip() or None));db.commit();audit(db,request,"Création catégorie",nom)
-    return RedirectResponse("/categories",303)
+    clean=nom.strip()
+    if not db.query(Categorie).filter(func.lower(Categorie.nom)==clean.lower()).first():
+        db.add(Categorie(nom=clean,description=description.strip() or None));db.commit();audit(db,request,"Création catégorie",clean)
+        return RedirectResponse("/categories?message=ajoutee",303)
+    return RedirectResponse("/categories?error=existe",303)
+
+@app.post("/categories/{cat_id}/delete")
+def delete_category(cat_id:int,request:Request,db:Session=Depends(get_db)):
+    """Supprime une thématique et ses questionnaires/questions seulement si aucune session ne l'utilise.
+    Les évaluations existantes sont ainsi protégées.
+    """
+    if not require_staff(request):return RedirectResponse("/",303)
+    cat=db.get(Categorie,cat_id)
+    if not cat:return RedirectResponse("/categories?error=introuvable",303)
+    in_use = (db.query(SessionFormation).filter(SessionFormation.categorie_id==cat_id).count()
+              + db.query(SessionFormation).join(Questionnaire, SessionFormation.questionnaire_id==Questionnaire.id).filter(Questionnaire.categorie_id==cat_id).count())
+    if in_use:
+        return RedirectResponse("/categories?error=utilisee",303)
+    questionnaires=list(db.query(Questionnaire).filter(Questionnaire.categorie_id==cat_id).all())
+    try:
+        for qn in questionnaires:
+            db.query(Question).filter(Question.questionnaire_id==qn.id).delete(synchronize_session=False)
+            db.delete(qn)
+        name=cat.nom
+        db.delete(cat);db.commit();audit(db,request,"Suppression thématique",f"{name} + questionnaires/questions associés")
+        return RedirectResponse("/categories?message=supprimee",303)
+    except Exception as exc:
+        db.rollback();print(f"[SUPPRESSION CATEGORIE] {exc}",flush=True)
+        return RedirectResponse("/categories?error=suppression_impossible",303)
 
 @app.get("/questionnaires")
 def questionnaires_page(request:Request,db:Session=Depends(get_db)):
@@ -535,6 +598,10 @@ def builder(qid:int,request:Request,db:Session=Depends(get_db)):
 @app.post("/questionnaires/{qid}/questions")
 def add_question(qid:int,request:Request,libelle:str=Form(...),type_reponse:str=Form(...),options:str=Form(""),obligatoire:str=Form("oui"),db:Session=Depends(get_db)):
     if not require_staff(request):return RedirectResponse("/",303)
+    if not db.get(Questionnaire,qid): raise HTTPException(404)
+    allowed={"note5","note10","oui_non","choix","choix_multiple","texte","paragraphe"}
+    if type_reponse not in allowed:return RedirectResponse(f"/questionnaires/{qid}",303)
+    if type_reponse in {"choix","choix_multiple"} and not options.strip():return RedirectResponse(f"/questionnaires/{qid}",303)
     ordre=(db.query(func.max(Question.ordre)).filter_by(questionnaire_id=qid).scalar() or 0)+1
     db.add(Question(questionnaire_id=qid,libelle=libelle.strip(),type_reponse=type_reponse,options=options.strip() or None,obligatoire=obligatoire=="oui",ordre=ordre));db.commit();return RedirectResponse(f"/questionnaires/{qid}",303)
 
@@ -812,7 +879,8 @@ async def submit_evaluation(aid:int,request:Request,db:Session=Depends(get_db)):
     if a.beneficie is not True:return RedirectResponse("/mon-espace?error=participation_requise",303)
     form=await request.form();scores=[];comments=[];recommend=False;values=[];recommendation_negative=False;recommendation_reason=""
     for q in a.session.questionnaire.questions:
-        v=str(form.get(f"q_{q.id}","")).strip(); label=(q.libelle or "").lower()
+        vlist=form.getlist(f"q_{q.id}")
+        v=", ".join(str(x).strip() for x in vlist if str(x).strip()) if q.type_reponse=="choix_multiple" else str(form.get(f"q_{q.id}","")).strip(); label=(q.libelle or "").lower()
         if q.obligatoire and not v:return RedirectResponse(f"/mon-espace/evaluer/{aid}?error=required",303)
         if q.type_reponse in {"note5","note10"} and v:
             try:scores.append(float(v))
@@ -844,58 +912,90 @@ def analysis_page(request:Request,db:Session=Depends(get_db)):
 @app.get("/export/evaluations.xlsx")
 def export_xlsx(request:Request,db:Session=Depends(get_db)):
     if not require_staff(request):return RedirectResponse("/",303)
-    wb=Workbook();ws=wb.active;ws.title="Évaluations";ws.append(["Collaborateur","Email","Département","Thématique","Session","Satisfaction","Recommande","Commentaire","Date"])
-    for r in db.query(Reponse).all():
-        a=r.affectation;ws.append([f"{a.collaborateur.prenom} {a.collaborateur.nom}",a.collaborateur.email,a.collaborateur.departement.nom if a.collaborateur.departement else "",a.session.categorie.nom,a.session.titre,r.satisfaction_globale,"Oui" if r.recommande else "Non",r.commentaire or "",r.date_reponse.strftime("%d/%m/%Y")])
-    out=io.BytesIO();wb.save(out);out.seek(0);return StreamingResponse(out,media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",headers={"Content-Disposition":'attachment; filename="evaluations_firsi.xlsx"'})
+    wb=Workbook()
+    # Synthèse
+    ws=wb.active;ws.title="Synthèse"
+    total_rep=db.query(Reponse).count(); avg=db.query(func.avg(Reponse.satisfaction_globale)).scalar() or 0
+    total_coll=db.query(Collaborateur).filter(Collaborateur.actif.is_(True)).count()
+    total_ben=db.query(Affectation).filter(Affectation.beneficie.is_(True)).count()
+    total_form=db.query(SessionFormation).join(Categorie,SessionFormation.categorie_id==Categorie.id).filter(SessionFormation.active.is_(True),func.lower(Categorie.nom)=="formation").count()
+    ws.append(["FIRSI – UM6P | Export des données",""]);ws.append(["Indicateur","Valeur"])
+    for row in [("Collaborateurs actifs",total_coll),("Sessions actives",db.query(SessionFormation).filter_by(active=True).count()),("Sessions Formation",total_form),("Bénéficiaires confirmés",total_ben),("Évaluations reçues",total_rep),("Satisfaction moyenne /5",round(float(avg),2))]:ws.append(row)
+    # Collaborateurs
+    ws=wb.create_sheet("Collaborateurs");ws.append(["Code","Nom","Prénom","Email","Fonction","Département","Actif","A quitté","Date départ","Motif départ"])
+    for c in db.query(Collaborateur).order_by(Collaborateur.id):ws.append([c.code,c.nom,c.prenom,c.email,c.fonction or "",c.departement.nom if c.departement else "","Oui" if c.actif else "Non","Oui" if c.a_quitte else "Non",c.date_depart.strftime("%d/%m/%Y") if c.date_depart else "",c.motif_depart or ""])
+    # Affectations
+    ws=wb.create_sheet("Affectations");ws.append(["Collaborateur","Email","Session","Thématique","Type de formation","Bénéficie","Statut","Invitation envoyée","Date affectation"])
+    for a in db.query(Affectation).order_by(Affectation.id):ws.append([f"{a.collaborateur.prenom} {a.collaborateur.nom}",a.collaborateur.email,a.session.titre,a.session.categorie.nom,a.session.type_formation,a.beneficie if a.beneficie is not None else "En attente",a.statut,"Oui" if a.invitation_envoyee else "Non",a.created_at.strftime("%d/%m/%Y")])
+    # Évaluations
+    ws=wb.create_sheet("Évaluations");ws.append(["Collaborateur","Email","Thématique","Session","Type de formation","Satisfaction","Recommande","Commentaire","Date"])
+    for r in db.query(Reponse).order_by(Reponse.date_reponse.desc()):
+        a=r.affectation;ws.append([f"{a.collaborateur.prenom} {a.collaborateur.nom}",a.collaborateur.email,a.session.categorie.nom,a.session.titre,a.session.type_formation,r.satisfaction_globale,"Oui" if r.recommande else "Non",r.commentaire or "",r.date_reponse.strftime("%d/%m/%Y")])
+    # Réponses détaillées
+    ws=wb.create_sheet("Réponses détaillées");ws.append(["Collaborateur","Thématique","Session","Question","Type de question","Réponse","Date"])
+    for r in db.query(Reponse).order_by(Reponse.date_reponse.desc()):
+        a=r.affectation
+        for d in r.details:ws.append([f"{a.collaborateur.prenom} {a.collaborateur.nom}",a.session.categorie.nom,a.session.titre,d.question.libelle,d.question.type_reponse,d.valeur or "",r.date_reponse.strftime("%d/%m/%Y")])
+    # Sessions
+    ws=wb.create_sheet("Sessions");ws.append(["Session","Thématique","Type de formation","Date début","Date fin","Lieu","Animateur","Active"])
+    for x in db.query(SessionFormation).order_by(SessionFormation.id):ws.append([x.titre,x.categorie.nom,x.type_formation,x.date_debut or "",x.date_fin or "",x.lieu or "",x.animateur or "","Oui" if x.active else "Non"])
+    # Questionnaires / questions
+    ws=wb.create_sheet("Questionnaires");ws.append(["Questionnaire","Thématique","Description","Actif"])
+    for qn in db.query(Questionnaire).order_by(Questionnaire.id):ws.append([qn.titre,qn.categorie.nom,qn.description or "","Oui" if qn.actif else "Non"])
+    ws=wb.create_sheet("Questions");ws.append(["Questionnaire","Thématique","Ordre","Question","Type de réponse","Options","Obligatoire"])
+    for q in db.query(Question).join(Questionnaire).order_by(Question.questionnaire_id,Question.ordre):ws.append([q.questionnaire.titre,q.questionnaire.categorie.nom,q.ordre,q.libelle,q.type_reponse,q.options or "","Oui" if q.obligatoire else "Non"])
+    # Mise en forme simple et exploitable
+    for ws in wb.worksheets:
+        ws.freeze_panes="A2";ws.auto_filter.ref=ws.dimensions
+        for cell in ws[1]:cell.font=Font(bold=True);cell.fill=PatternFill("solid",fgColor="D9EAF7");cell.alignment=Alignment(vertical="center")
+        for col in range(1,ws.max_column+1):
+            maxlen=max((len(str(ws.cell(r,col).value or "")) for r in range(1,min(ws.max_row,100)+1)),default=10)
+            ws.column_dimensions[get_column_letter(col)].width=min(max(maxlen+2,12),55)
+    out=io.BytesIO();wb.save(out);out.seek(0)
+    return StreamingResponse(out,media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",headers={"Content-Disposition":'attachment; filename="FIRSI_donnees_evaluations.xlsx"'})
 
-def build_simple_pdf(lines:list[str])->bytes:
-    """Génère un PDF texte simple sans dépendance externe."""
-    safe=[]
-    for line in lines:
-        cleaned=line.replace("\\","\\\\").replace("(","\\(").replace(")","\\)")
-        cleaned=cleaned.encode("latin-1","replace").decode("latin-1")
-        safe.append(cleaned)
-    content=["BT","/F1 18 Tf","50 790 Td"]
-    for i,line in enumerate(safe):
-        if i:
-            content.append("0 -24 Td")
-        content.append(f"({line}) Tj")
-    content.append("ET")
-    stream="\n".join(content).encode("latin-1")
-    objects=[
-        b"<< /Type /Catalog /Pages 2 0 R >>",
-        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
-        b"<< /Length %d >>\nstream\n"%len(stream)+stream+b"\nendstream",
-        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-    ]
-    pdf=bytearray(b"%PDF-1.4\n")
-    offsets=[0]
-    for idx,obj in enumerate(objects,1):
-        offsets.append(len(pdf))
-        pdf.extend(f"{idx} 0 obj\n".encode()+obj+b"\nendobj\n")
-    xref=len(pdf)
-    pdf.extend(f"xref\n0 {len(objects)+1}\n".encode())
-    pdf.extend(b"0000000000 65535 f \n")
-    for off in offsets[1:]:
-        pdf.extend(f"{off:010d} 00000 n \n".encode())
-    pdf.extend(f"trailer\n<< /Size {len(objects)+1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF".encode())
-    return bytes(pdf)
+def _report_data(db):
+    total_coll=db.query(Collaborateur).filter(Collaborateur.actif.is_(True)).count()
+    total_departures=db.query(Collaborateur).filter(Collaborateur.a_quitte.is_(True)).count()
+    total_rep=db.query(Reponse).count(); avg=float(db.query(func.avg(Reponse.satisfaction_globale)).scalar() or 0)
+    total_ben=db.query(Affectation).filter(Affectation.beneficie.is_(True)).count()
+    collaborateurs_formes=(db.query(func.count(func.distinct(Affectation.collaborateur_id))).join(SessionFormation,Affectation.session_id==SessionFormation.id).join(Categorie,SessionFormation.categorie_id==Categorie.id).join(Collaborateur,Affectation.collaborateur_id==Collaborateur.id).filter(func.lower(Categorie.nom)=="formation",Collaborateur.actif.is_(True),Affectation.beneficie.is_(True)).scalar() or 0)
+    coverage=round(collaborateurs_formes/total_coll*100,1) if total_coll else 0
+    participation=round(total_rep/total_ben*100,1) if total_ben else 0
+    types=[]
+    for typ in ["Certifiante","Diplômante","Qualifiante"]:
+        n=db.query(SessionFormation).join(Categorie,SessionFormation.categorie_id==Categorie.id).filter(SessionFormation.active.is_(True),func.lower(Categorie.nom)=="formation",func.lower(SessionFormation.type_formation)==typ.lower()).count();types.append((typ,n))
+    themes=[]
+    for cat in db.query(Categorie).order_by(Categorie.nom):
+        score=float(db.query(func.avg(Reponse.satisfaction_globale)).join(Affectation,Reponse.affectation_id==Affectation.id).join(SessionFormation,Affectation.session_id==SessionFormation.id).filter(SessionFormation.categorie_id==cat.id).scalar() or 0)
+        rec=db.query(Reponse).join(Affectation,Reponse.affectation_id==Affectation.id).join(SessionFormation,Affectation.session_id==SessionFormation.id).filter(SessionFormation.categorie_id==cat.id).count()
+        themes.append((cat.nom,round(score,2),rec))
+    return locals()
 
 @app.get("/export/rapport.pdf")
 def export_pdf(request:Request,db:Session=Depends(get_db)):
     if not require_staff(request):return RedirectResponse("/",303)
-    total=db.query(Reponse).count()
-    avg=db.query(func.avg(Reponse.satisfaction_globale)).scalar() or 0
-    data=build_simple_pdf([
-        "FIRSI - UM6P",
-        "Rapport des evaluations",
-        f"Nombre d evaluations : {total}",
-        f"Satisfaction moyenne : {round(float(avg),2)}",
-        "© FIRSI - UM6P",
-    ])
-    return StreamingResponse(io.BytesIO(data),media_type="application/pdf",headers={"Content-Disposition":'attachment; filename="rapport_firsi.pdf"'})
+    if colors is None:
+        return RedirectResponse("/dashboard?error=pdf_dependency",303)
+    d=_report_data(db);out=io.BytesIO()
+    doc=SimpleDocTemplate(out,pagesize=A4,rightMargin=16*mm,leftMargin=16*mm,topMargin=15*mm,bottomMargin=15*mm,title="Rapport FIRSI – UM6P")
+    styles=getSampleStyleSheet();title=ParagraphStyle("title",parent=styles["Title"],fontSize=22,leading=26,spaceAfter=5,textColor=colors.HexColor("#17365D"));sub=ParagraphStyle("sub",parent=styles["Normal"],fontSize=9,textColor=colors.HexColor("#667085"));h=ParagraphStyle("h",parent=styles["Heading2"],fontSize=13,leading=16,textColor=colors.HexColor("#17365D"),spaceBefore=8,spaceAfter=6);small=ParagraphStyle("small",parent=styles["Normal"],fontSize=8.5,leading=11)
+    story=[Paragraph("FIRSI – UM6P",title),Paragraph("Rapport exécutif des formations et évaluations",styles["Heading2"]),Paragraph(datetime.now().strftime("Édité le %d/%m/%Y à %H:%M"),sub),Spacer(1,7*mm)]
+    kpi=[[Paragraph(f'<b>COLLABORATEURS ACTIFS</b><br/><font size="16">{d["total_coll"]}</font>',small),Paragraph(f'<b>TAUX DE COUVERTURE</b><br/><font size="16">{d["coverage"]} %</font>',small),Paragraph(f'<b>TAUX DE PARTICIPATION</b><br/><font size="16">{d["participation"]} %</font>',small),Paragraph(f'<b>SATISFACTION</b><br/><font size="16">{d["avg"]:.2f} / 5</font>',small)]]
+    t=Table(kpi,colWidths=[43*mm]*4,rowHeights=[20*mm]);t.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,-1),colors.HexColor("#F3F6FA")),("BOX",(0,0),(-1,-1),0.5,colors.HexColor("#D0D5DD")),("INNERGRID",(0,0),(-1,-1),0.25,colors.HexColor("#D0D5DD")),("FONTNAME",(0,0),(-1,-1),"Helvetica-Bold"),("FONTSIZE",(0,0),(-1,-1),13),("ALIGN",(0,0),(-1,-1),"CENTER"),("VALIGN",(0,0),(-1,-1),"MIDDLE")]))
+    story += [t,Spacer(1,7*mm),Paragraph("Indicateurs clés",h),Paragraph(f'Formations actives : {db.query(SessionFormation).join(Categorie,SessionFormation.categorie_id==Categorie.id).filter(SessionFormation.active.is_(True),func.lower(Categorie.nom)=="formation").count()} · Départs / démissions : {d["total_departures"]} · Évaluations reçues : {d["total_rep"]} · Bénéficiaires confirmés : {d["total_ben"]}',small),Paragraph("Répartition des formations par type",h)]
+    type_rows=[["Type","Nombre","Part"]]+[[a,str(b),f'{round(b/sum(x[1] for x in d["types"])*100,1) if sum(x[1] for x in d["types"]) else 0} %'] for a,b in d["types"]]
+    tt=Table(type_rows,colWidths=[80*mm,35*mm,35*mm]);tt.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),colors.HexColor("#17365D")),("TEXTCOLOR",(0,0),(-1,0),colors.white),("GRID",(0,0),(-1,-1),0.3,colors.HexColor("#D0D5DD")),("FONTSIZE",(0,0),(-1,-1),9),("ALIGN",(1,1),(-1,-1),"CENTER"),("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.white,colors.HexColor("#F8FAFC")])]))
+    story += [tt,Spacer(1,6*mm),Paragraph("Performance par thématique",h)]
+    theme_rows=[["Thématique","Satisfaction /5","Évaluations"]]+[[a,f'{b:.2f}',str(c)] for a,b,c in d["themes"]]
+    th=Table(theme_rows,colWidths=[95*mm,35*mm,35*mm]);th.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),colors.HexColor("#17365D")),("TEXTCOLOR",(0,0),(-1,0),colors.white),("GRID",(0,0),(-1,-1),0.3,colors.HexColor("#D0D5DD")),("FONTSIZE",(0,0),(-1,-1),8.5),("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.white,colors.HexColor("#F8FAFC")]),("ALIGN",(1,1),(-1,-1),"CENTER")]))
+    story += [th,PageBreak(),Paragraph("Synthèse opérationnelle",title),Spacer(1,4*mm)]
+    top=db.query(SessionFormation.titre,func.avg(Reponse.satisfaction_globale),func.count(Reponse.id)).join(Affectation,Affectation.session_id==SessionFormation.id).join(Reponse,Reponse.affectation_id==Affectation.id).group_by(SessionFormation.id,SessionFormation.titre).order_by(func.avg(Reponse.satisfaction_globale).desc()).limit(10).all()
+    rows=[["Session","Satisfaction","Réponses"]]+[[x[0],f'{float(x[1]):.2f} / 5',str(x[2])] for x in top]
+    ts=Table(rows,colWidths=[100*mm,35*mm,30*mm]);ts.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),colors.HexColor("#17365D")),("TEXTCOLOR",(0,0),(-1,0),colors.white),("GRID",(0,0),(-1,-1),0.3,colors.HexColor("#D0D5DD")),("FONTSIZE",(0,0),(-1,-1),8.5),("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.white,colors.HexColor("#F8FAFC")])]))
+    story += [Paragraph("Top des sessions évaluées",h),ts,Spacer(1,8*mm),Paragraph("Confidentialité",h),Paragraph("Ce rapport reprend la vue globale du tableau de bord. Les départements ne sont pas présentés dans la synthèse exécutive afin de préserver une lecture globale et confidentielle. Les données détaillées sont disponibles dans l’export Excel sécurisé.",small),Spacer(1,8*mm),Paragraph("FIRSI – UM6P · Document généré automatiquement depuis la plateforme d’évaluation",sub)]
+    doc.build(story);out.seek(0)
+    return StreamingResponse(out,media_type="application/pdf",headers={"Content-Disposition":'attachment; filename="FIRSI_rapport_executif.pdf"'})
 
 @app.post("/admin/nettoyage-tests")
 def cleanup_test_data(request:Request,confirmation:str=Form(...),db:Session=Depends(get_db)):

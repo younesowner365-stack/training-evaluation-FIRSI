@@ -135,6 +135,24 @@
 <section class="section-block">
   <div class="section-heading">
     <div>
+      <span class="exec-eyebrow">FORMATIONS</span>
+      <h2>Répartition par type de formation</h2>
+    </div>
+  </div>
+  <div class="theme-grid">
+    {% for t in formation_types %}
+    <article class="theme-premium-card">
+      <div class="theme-premium-head"><div><span class="theme-marker"></span><strong>{{ t.type }}</strong></div><span class="rating-badge">{{ t.pct }}%</span></div>
+      <div class="theme-stat-grid"><div><span>Sessions</span><strong>{{ t.count }}</strong></div><div><span>Part</span><strong>{{ t.pct }}%</strong></div></div>
+      <div class="score-line"><span style="width: {{ t.pct }}%"></span></div>
+    </article>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="section-block">
+  <div class="section-heading">
+    <div>
       <span class="exec-eyebrow">PERFORMANCE PAR THÉMATIQUE</span>
       <h2>Questions, participation et satisfaction</h2>
     </div>
