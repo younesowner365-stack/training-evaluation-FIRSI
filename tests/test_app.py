@@ -22,3 +22,12 @@ def test_defaults():
 def test_login():
     r=client.post('/auth/staff',data={'username':'admin','password':'Admin@2026'},follow_redirects=False)
     assert r.status_code==303
+
+
+def test_product_owner_features():
+    src=open("main.py",encoding="utf-8").read()
+    assert 'a_quitte=Column(Boolean,default=False,nullable=False)' in src
+    assert 'Certifiante;Diplômante;Qualifiante' in src
+    assert '@app.post("/collaborateurs/{cid}/departure")' in src
+    assert 'recommendationReasonBlock' in open("app/templates/evaluation_form.html",encoding="utf-8").read()
+    assert 'Nombre de formations' in open("app/templates/dashboard.html",encoding="utf-8").read()

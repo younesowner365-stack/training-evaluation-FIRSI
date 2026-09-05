@@ -59,6 +59,9 @@ class Collaborateur(Base):
     fonction=Column(String(180))
     departement_id=Column(Integer,ForeignKey("departements.id"))
     actif=Column(Boolean,default=True)
+    a_quitte=Column(Boolean,default=False,nullable=False)
+    date_depart=Column(DateTime,nullable=True)
+    motif_depart=Column(String(80),nullable=True)
     created_at=Column(DateTime,default=datetime.utcnow)
     departement=relationship("Departement")
     affectations=relationship("Affectation",back_populates="collaborateur",cascade="all, delete-orphan")
@@ -166,6 +169,9 @@ def ensure_runtime_schema():
         if engine.url.get_backend_name() == "postgresql":
             conn.execute(text("ALTER TABLE collaborateurs ADD COLUMN IF NOT EXISTS password_hash VARCHAR(255)"))
             conn.execute(text("ALTER TABLE collaborateurs ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT TRUE"))
+            conn.execute(text("ALTER TABLE collaborateurs ADD COLUMN IF NOT EXISTS a_quitte BOOLEAN NOT NULL DEFAULT FALSE"))
+            conn.execute(text("ALTER TABLE collaborateurs ADD COLUMN IF NOT EXISTS date_depart TIMESTAMP"))
+            conn.execute(text("ALTER TABLE collaborateurs ADD COLUMN IF NOT EXISTS motif_depart VARCHAR(80)"))
             conn.execute(text("ALTER TABLE affectations ADD COLUMN IF NOT EXISTS beneficie BOOLEAN"))
         else:
             cols={row[1] for row in conn.execute(text("PRAGMA table_info(collaborateurs)"))}
@@ -173,6 +179,12 @@ def ensure_runtime_schema():
                 conn.execute(text("ALTER TABLE collaborateurs ADD COLUMN password_hash VARCHAR(255)"))
             if "must_change_password" not in cols:
                 conn.execute(text("ALTER TABLE collaborateurs ADD COLUMN must_change_password BOOLEAN NOT NULL DEFAULT 1"))
+            if "a_quitte" not in cols:
+                conn.execute(text("ALTER TABLE collaborateurs ADD COLUMN a_quitte BOOLEAN NOT NULL DEFAULT 0"))
+            if "date_depart" not in cols:
+                conn.execute(text("ALTER TABLE collaborateurs ADD COLUMN date_depart DATETIME"))
+            if "motif_depart" not in cols:
+                conn.execute(text("ALTER TABLE collaborateurs ADD COLUMN motif_depart VARCHAR(80)"))
             affect_cols={row[1] for row in conn.execute(text("PRAGMA table_info(affectations)"))}
             if "beneficie" not in affect_cols:
                 conn.execute(text("ALTER TABLE affectations ADD COLUMN beneficie BOOLEAN"))
@@ -279,6 +291,15 @@ def seed():
                 qn=Questionnaire(titre=title,categorie_id=cat.id,description=f"Questionnaire par défaut {cat_name}");db.add(qn);db.flush()
                 for i,(lib,t,opt) in enumerate(questions,1):db.add(Question(questionnaire_id=qn.id,libelle=lib,type_reponse=t,options=opt,ordre=i))
         db.commit()
+        formation_cat=db.query(Categorie).filter(func.lower(Categorie.nom)=="formation").first()
+        if formation_cat:
+            for qn in db.query(Questionnaire).filter(Questionnaire.categorie_id==formation_cat.id).all():
+                labels=[(q.libelle or "").lower() for q in qn.questions]
+                if not any("type de cette formation" in x for x in labels):
+                    maxo=max([q.ordre for q in qn.questions] or [0]); db.add(Question(questionnaire_id=qn.id,libelle="Quel est le type de cette formation ?",type_reponse="choix",options="Certifiante;Diplômante;Qualifiante",obligatoire=True,ordre=maxo+1))
+                if not any("pourquoi ne recommanderiez-vous pas" in x for x in labels):
+                    maxo=max([q.ordre for q in qn.questions] or [0])+1; db.add(Question(questionnaire_id=qn.id,libelle="Si non, pourquoi ne recommanderiez-vous pas cette formation ?",type_reponse="paragraphe",obligatoire=False,ordre=maxo))
+        db.commit()
     finally:db.close()
 seed()
 
@@ -366,6 +387,7 @@ def dashboard(request:Request,db:Session=Depends(get_db)):
     if not require_staff(request):return RedirectResponse("/",303)
 
     total_collaborateurs=db.query(Collaborateur).filter(Collaborateur.actif.is_(True)).count()
+    total_departures=db.query(Collaborateur).filter(Collaborateur.a_quitte.is_(True)).count()
     total_aff=db.query(Affectation).count()
     total_rep=db.query(Reponse).count()
     pending=max(
@@ -472,6 +494,8 @@ def dashboard(request:Request,db:Session=Depends(get_db)):
             "non_beneficiaires":total_non_beneficiaires,
             "confirmation_attente":total_confirmation_attente,
             "non_formes":max(total_collaborateurs-collaborateurs_formes,0),
+            "formations":db.query(SessionFormation).join(Categorie,SessionFormation.categorie_id==Categorie.id).filter(SessionFormation.active.is_(True),func.lower(Categorie.nom)=="formation").count(),
+            "departures":total_departures,
         },
         "themes":themes,
         "department_labels":[x[0] for x in deps],
@@ -594,6 +618,15 @@ def reset_collaborateur_password(
         db.rollback()
         print(f"[RESET PASSWORD COLLABORATEUR] {exc}",flush=True)
         return RedirectResponse("/collaborateurs?error=reinitialisation_impossible",303)
+
+@app.post("/collaborateurs/{cid}/departure")
+def mark_departure(cid:int,request:Request,motif_depart:str=Form("Démission"),db:Session=Depends(get_db)):
+    if not require_staff(request): return RedirectResponse("/",303)
+    c=db.get(Collaborateur,cid)
+    if not c: return RedirectResponse("/collaborateurs?error=introuvable",303)
+    c.a_quitte=True; c.date_depart=datetime.utcnow(); c.motif_depart=motif_depart.strip() or "Démission"; c.actif=False
+    db.commit(); audit(db,request,"Départ collaborateur",f"{c.prenom} {c.nom} — {c.motif_depart}")
+    return RedirectResponse("/collaborateurs?message=depart_enregistre",303)
 
 @app.post("/collaborateurs/{cid}/delete")
 def delete_collaborateur(cid:int,request:Request,db:Session=Depends(get_db)):
@@ -777,16 +810,19 @@ async def submit_evaluation(aid:int,request:Request,db:Session=Depends(get_db)):
     if request.session.get("role")!="COLLABORATEUR" or not a or a.collaborateur_id!=request.session.get("collaborateur_id"):raise HTTPException(403)
     if a.reponse:return RedirectResponse("/mon-espace?already=1",303)
     if a.beneficie is not True:return RedirectResponse("/mon-espace?error=participation_requise",303)
-    form=await request.form();scores=[];comments=[];recommend=False;values=[]
+    form=await request.form();scores=[];comments=[];recommend=False;values=[];recommendation_negative=False;recommendation_reason=""
     for q in a.session.questionnaire.questions:
-        v=str(form.get(f"q_{q.id}","")).strip()
+        v=str(form.get(f"q_{q.id}","")).strip(); label=(q.libelle or "").lower()
         if q.obligatoire and not v:return RedirectResponse(f"/mon-espace/evaluer/{aid}?error=required",303)
         if q.type_reponse in {"note5","note10"} and v:
             try:scores.append(float(v))
             except:pass
-        if q.type_reponse=="oui_non" and v.lower()=="oui":recommend=True
+        if q.type_reponse=="oui_non" and ("recommander" in label or "suggér" in label or "suggere" in label):
+            recommend=(v.lower()=="oui"); recommendation_negative=(v.lower()=="non")
+        if "pourquoi ne recommanderiez-vous pas" in label: recommendation_reason=v
         if q.type_reponse in {"texte","paragraphe"} and v:comments.append(v)
         values.append((q,v))
+    if recommendation_negative and not recommendation_reason:return RedirectResponse(f"/mon-espace/evaluer/{aid}?error=recommendation_reason",303)
     r=Reponse(affectation_id=aid,satisfaction_globale=round(sum(scores)/len(scores),2) if scores else 0,recommande=recommend,commentaire="\n".join(comments) or None);db.add(r);db.flush()
     for q,v in values:db.add(ReponseDetail(reponse_id=r.id,question_id=q.id,valeur=v))
     a.statut="Évaluée";db.commit();return RedirectResponse("/mon-espace?success=1",303)
