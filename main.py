@@ -467,12 +467,26 @@ def dashboard(request:Request,db:Session=Depends(get_db)):
         collaborateurs_formes/total_collaborateurs*100,1
     ) if total_collaborateurs else 0
 
-    # Taux de participation aux évaluations :
-    # réponses reçues / bénéficiaires confirmés.
-    total_beneficiaires=db.query(Affectation).filter(Affectation.beneficie.is_(True)).count()
-    total_non_beneficiaires=db.query(Affectation).filter(Affectation.beneficie.is_(False)).count()
+    # Les bénéficiaires sont des collaborateurs uniques, pas des affectations.
+    # Un même collaborateur peut avoir plusieurs formations/évaluations sans être
+    # compté plusieurs fois dans l'indicateur « Bénéficiaires ».
+    total_beneficiaires=(
+        db.query(func.count(func.distinct(Affectation.collaborateur_id)))
+        .filter(Affectation.beneficie.is_(True))
+        .scalar()
+    ) or 0
+    total_non_beneficiaires=(
+        db.query(func.count(func.distinct(Affectation.collaborateur_id)))
+        .filter(Affectation.beneficie.is_(False))
+        .scalar()
+    ) or 0
     total_confirmation_attente=db.query(Affectation).filter(Affectation.beneficie.is_(None)).count()
-    taux_participation=round(total_rep/total_beneficiaires*100,1) if total_beneficiaires else 0
+
+    # Le taux de participation reste calculé par évaluation attendue :
+    # réponses reçues / affectations avec participation confirmée.
+    # Cela évite par exemple 200 % lorsqu'un même bénéficiaire évalue 2 formations.
+    total_participations_confirmees=db.query(Affectation).filter(Affectation.beneficie.is_(True)).count()
+    taux_participation=round(total_rep/total_participations_confirmees*100,1) if total_participations_confirmees else 0
 
     # Questions, réponses reçues et réponses en attente par thématique
     themes=[]
@@ -547,6 +561,7 @@ def dashboard(request:Request,db:Session=Depends(get_db)):
             "recues":total_rep,
             "affectations":total_aff,
             "beneficiaires":total_beneficiaires,
+            "participations_confirmees":total_participations_confirmees,
             "non_beneficiaires":total_non_beneficiaires,
             "confirmation_attente":total_confirmation_attente,
             "non_formes":max(total_collaborateurs-collaborateurs_formes,0),
@@ -951,10 +966,11 @@ def export_xlsx(request:Request,db:Session=Depends(get_db)):
     ws=wb.active;ws.title="Synthèse"
     total_rep=db.query(Reponse).count(); avg=db.query(func.avg(Reponse.satisfaction_globale)).scalar() or 0
     total_coll=db.query(Collaborateur).filter(Collaborateur.actif.is_(True)).count()
-    total_ben=db.query(Affectation).filter(Affectation.beneficie.is_(True)).count()
+    total_ben=(db.query(func.count(func.distinct(Affectation.collaborateur_id))).filter(Affectation.beneficie.is_(True)).scalar() or 0)
+    total_participations=db.query(Affectation).filter(Affectation.beneficie.is_(True)).count()
     total_form=db.query(SessionFormation).join(Categorie,SessionFormation.categorie_id==Categorie.id).filter(SessionFormation.active.is_(True),func.lower(Categorie.nom)=="formation").count()
     ws.append(["FIRSI – UM6P | Export des données",""]);ws.append(["Indicateur","Valeur"])
-    for row in [("Collaborateurs actifs",total_coll),("Sessions actives",db.query(SessionFormation).filter_by(active=True).count()),("Sessions Formation",total_form),("Bénéficiaires confirmés",total_ben),("Évaluations reçues",total_rep),("Satisfaction moyenne /5",round(float(avg),2))]:ws.append(row)
+    for row in [("Collaborateurs actifs",total_coll),("Sessions actives",db.query(SessionFormation).filter_by(active=True).count()),("Sessions Formation",total_form),("Bénéficiaires uniques confirmés",total_ben),("Participations confirmées",total_participations),("Évaluations reçues",total_rep),("Satisfaction moyenne /5",round(float(avg),2))]:ws.append(row)
     # Collaborateurs
     ws=wb.create_sheet("Collaborateurs");ws.append(["Code","Nom","Prénom","Email","Fonction","Département","Actif","A quitté","Date départ","Motif départ"])
     for c in db.query(Collaborateur).order_by(Collaborateur.id):ws.append([c.code,c.nom,c.prenom,c.email,c.fonction or "",c.departement.nom if c.departement else "","Oui" if c.actif else "Non","Oui" if c.a_quitte else "Non",c.date_depart.strftime("%d/%m/%Y") if c.date_depart else "",c.motif_depart or ""])
@@ -992,10 +1008,11 @@ def _report_data(db):
     total_coll=db.query(Collaborateur).filter(Collaborateur.actif.is_(True)).count()
     total_departures=db.query(Collaborateur).filter(Collaborateur.a_quitte.is_(True)).count()
     total_rep=db.query(Reponse).count(); avg=float(db.query(func.avg(Reponse.satisfaction_globale)).scalar() or 0)
-    total_ben=db.query(Affectation).filter(Affectation.beneficie.is_(True)).count()
+    total_ben=(db.query(func.count(func.distinct(Affectation.collaborateur_id))).filter(Affectation.beneficie.is_(True)).scalar() or 0)
+    total_participations=db.query(Affectation).filter(Affectation.beneficie.is_(True)).count()
     collaborateurs_formes=(db.query(func.count(func.distinct(Affectation.collaborateur_id))).join(SessionFormation,Affectation.session_id==SessionFormation.id).join(Categorie,SessionFormation.categorie_id==Categorie.id).join(Collaborateur,Affectation.collaborateur_id==Collaborateur.id).filter(func.lower(Categorie.nom)=="formation",Collaborateur.actif.is_(True),Affectation.beneficie.is_(True)).scalar() or 0)
     coverage=round(collaborateurs_formes/total_coll*100,1) if total_coll else 0
-    participation=round(total_rep/total_ben*100,1) if total_ben else 0
+    participation=round(total_rep/total_participations*100,1) if total_participations else 0
     type_items,type_sources,total_typed_evaluations=_formation_type_stats(db)
     types=[(x["type"],x["count"]) for x in type_items]
     themes=[]
@@ -1124,7 +1141,7 @@ def export_pdf(request:Request,db:Session=Depends(get_db)):
     action_data=[
         ("Bénéficiaires",d["total_ben"],green,"Base de participation"),
         ("Évaluations reçues",d["total_rep"],blue,"Questionnaires soumis"),
-        ("En attente",max(d["total_ben"]-d["total_rep"],0),gold,"Relances prioritaires"),
+        ("En attente",max(d["total_participations"]-d["total_rep"],0),gold,"Relances prioritaires"),
         ("Non formés",max(d["total_coll"]-d["collaborateurs_formes"],0),red,"Couverture à renforcer"),
     ]
     for i,item in enumerate(action_data):card(margin+i*(aw+action_gap),ay,aw,66,*item)
