@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block page_title %}Tableau de bord exécutif{% endblock %}
+{% block content %}
+
+<section class="bi-brand-header">
+  <div class="bi-brand-left">
+    <img src="/static/img/firsi-brand-logos.png" alt="UM6P - Fondation Ibn Rochd">
+  </div>
+  <div class="bi-brand-title">
+    <span>FIRSI — UM6P</span>
+    <h1>Tableau de bord – Évaluation des formations</h1>
+    <p>Date de génération : <strong id="dashboardGenerationDate"></strong></p>
+  </div>
+  <div class="bi-brand-actions">
+    <a class="btn secondary" href="/export/evaluations.xlsx">Export Excel</a>
+    <a class="btn" href="/export/rapport.pdf">Dashboard PDF</a>
+  </div>
+</section>
+
+<section class="bi-kpi-grid">
+  <article class="bi-kpi"><div class="bi-icon blue">👥</div><div><span>Collaborateurs actifs</span><strong>{{ kpis.collaborateurs }}</strong><small>Effectif de référence</small></div></article>
+  <article class="bi-kpi"><div class="bi-icon orange">🎓</div><div><span>Nombre de formations</span><strong>{{ kpis.formations }}</strong><small>Sessions actives</small></div></article>
+  <article class="bi-kpi"><div class="bi-icon orange">◔</div><div><span>Taux de couverture</span><strong>{{ kpis.couverture }}%</strong><small>{{ kpis.collaborateurs_formes }} collaborateur(s) formé(s)</small></div></article>
+  <article class="bi-kpi"><div class="bi-icon blue">▤</div><div><span>Taux de participation</span><strong>{{ kpis.participation }}%</strong><small>{{ kpis.recues }} réponse(s) reçue(s)</small></div></article>
+  <article class="bi-kpi"><div class="bi-icon gold">☆</div><div><span>Satisfaction moyenne</span><strong>{{ kpis.satisfaction }}/5</strong><small>Moyenne des évaluations</small></div></article>
+  <article class="bi-kpi"><div class="bi-icon red">↪</div><div><span>Départs</span><strong>{{ kpis.departures }}</strong><small>Historique conservé</small></div></article>
+</section>
+
+<section class="bi-dashboard-grid bi-dashboard-grid-top">
+  <article class="bi-panel bi-panel-wide">
+    <div class="bi-panel-head"><div><span>COUVERTURE & PARTICIPATION</span><h2>Pilotage des évaluations</h2></div></div>
+    <div class="bi-bars">
+      <div class="bi-bar-row"><div><b>Couverture des formations</b><em>{{ kpis.couverture }}%</em></div><div class="bi-bar"><i style="width:{{ kpis.couverture }}%"></i></div><small>{{ kpis.collaborateurs_formes }} formé(s) · {{ kpis.non_formes }} non formé(s)</small></div>
+      <div class="bi-bar-row"><div><b>Participation aux évaluations</b><em>{{ kpis.participation }}%</em></div><div class="bi-bar green"><i style="width:{{ kpis.participation }}%"></i></div><small>{{ kpis.recues }} reçu(s) · {{ kpis.attente }} en attente</small></div>
+      <div class="bi-mini-metrics"><div><span>Affectations</span><strong>{{ kpis.affectations }}</strong></div><div><span>Non bénéficiaires</span><strong>{{ kpis.non_beneficiaires }}</strong></div><div><span>Sessions actives</span><strong>{{ kpis.sessions }}</strong></div></div>
+    </div>
+  </article>
+
+  <article class="bi-panel">
+    <div class="bi-panel-head"><div><span>RÉPARTITION</span><h2>Formations par type</h2></div></div>
+    <div class="bi-chart-wrap"><canvas id="formationTypeChart"></canvas></div>
+    <div class="bi-legend-list">
+      {% for t in formation_types %}<div><span class="bi-legend-dot d{{ loop.index }}"></span><b>{{ t.type }}</b><strong>{{ t.count }}</strong><em>{{ t.pct }}%</em></div>{% endfor %}
+    </div>
+  </article>
+
+  <article class="bi-panel bi-gauge-panel">
+    <div class="bi-panel-head"><div><span>ENGAGEMENT</span><h2>Taux de participation</h2></div></div>
+    <div class="bi-gauge"><div class="bi-gauge-ring" style="--p:{{ kpis.participation }}"><div><strong>{{ kpis.participation }}%</strong><span>{{ kpis.recues }} / {{ kpis.beneficiaires or kpis.recues }}</span></div></div></div>
+  </article>
+
+  <article class="bi-panel bi-sat-panel">
+    <div class="bi-panel-head"><div><span>EXPÉRIENCE</span><h2>Satisfaction moyenne</h2></div></div>
+    <div class="bi-stars">★★★★<span>★</span></div><strong class="bi-sat-score">{{ kpis.satisfaction }} / 5</strong><p>Basée sur les évaluations reçues</p>
+  </article>
+</section>
+
+<section class="bi-dashboard-grid bi-dashboard-grid-bottom">
+  <article class="bi-panel">
+    <div class="bi-panel-head"><div><span>SATISFACTION</span><h2>Par thématique</h2></div></div>
+    <div class="bi-theme-bars">
+      {% for t in themes[:6] %}<div class="bi-theme-row"><span>{{ t.nom }}</span><div><i style="width:{{ (t.satisfaction / 5 * 100) if t.satisfaction else 0 }}%"></i></div><b>{{ t.satisfaction }}/5</b></div>{% endfor %}
+      {% if not themes %}<div class="empty-state">Aucune évaluation disponible.</div>{% endif %}
+    </div>
+  </article>
+
+  <article class="bi-panel bi-panel-wide2">
+    <div class="bi-panel-head"><div><span>PERFORMANCE</span><h2>Top 5 des formations les plus évaluées</h2></div></div>
+    {% if top_sessions %}<div class="bi-ranking-table">
+      <div class="bi-ranking-head"><span>#</span><span>Formation</span><span>Réponses</span><span>Satisfaction</span></div>
+      {% for s in top_sessions %}<div class="bi-ranking-row"><b>{{ loop.index }}</b><span>{{ s[0] }}</span><span>{{ s[2] }}</span><div class="bi-scorebar"><i style="width:{{ (s[1] / 5 * 100) if s[1] else 0 }}%"></i><b>{{ "%.1f"|format(s[1]) }}/5</b></div></div>{% endfor %}
+    </div>{% else %}<div class="empty-state">Les meilleures sessions apparaîtront après les premières évaluations.</div>{% endif %}
+  </article>
+
+  <article class="bi-panel">
+    <div class="bi-panel-head"><div><span>PARTICIPANTS</span><h2>Répartition</h2></div></div>
+    <div class="bi-participation-donut"><canvas id="participationChart"></canvas></div>
+    <div class="bi-participant-legend"><div><span class="bi-legend-dot blue-dot"></span><b>A participé</b><strong>{{ kpis.recues }} ({{ kpis.participation }}%)</strong></div><div><span class="bi-legend-dot gray-dot"></span><b>En attente</b><strong>{{ kpis.attente }}</strong></div></div>
+  </article>
+</section>
+
+<section class="bi-action-grid">
+  <article class="bi-action attention"><div class="bi-action-icon">!</div><div><h3>Points d’attention</h3><p>{{ kpis.attente }} évaluation(s) en attente. {{ kpis.non_formes }} collaborateur(s) restent à couvrir par une formation.</p></div></article>
+  <article class="bi-action recommendation"><div class="bi-action-icon">◎</div><div><h3>Recommandations</h3><p>Prioriser les relances et suivre les thématiques dont la satisfaction est la plus faible.</p></div></article>
+  <article class="bi-action decision"><div class="bi-action-icon">✓</div><div><h3>Décisions à considérer</h3><p>Utiliser les résultats consolidés pour ajuster le plan de formation et les prochaines actions FIRSI.</p></div></article>
+</section>
+
+<div class="bi-confidential">Document confidentiel · Usage interne uniquement · Vue globale anonymisée</div>
+
+<script>
+(function(){
+  const d=new Date();
+  document.getElementById('dashboardGenerationDate').textContent=d.toLocaleDateString('fr-FR',{day:'2-digit',month:'long',year:'numeric'});
+  const orange='#F05A28', navy='#0B2C5F', blue='#2E73D2', lightBlue='#6EA5E9', pale='#DCE4EF';
+  const ft=document.getElementById('formationTypeChart');
+  if(ft){new Chart(ft,{type:'doughnut',data:{labels:[{% for t in formation_types %}'{{ t.type|e }}'{% if not loop.last %},{% endif %}{% endfor %}],datasets:[{data:[{% for t in formation_types %}{{ t.count }}{% if not loop.last %},{% endif %}{% endfor %}],backgroundColor:[navy,orange,lightBlue],borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,cutout:'62%',plugins:{legend:{display:false}}}})}
+  const pc=document.getElementById('participationChart');
+  if(pc){new Chart(pc,{type:'doughnut',data:{labels:['A participé','En attente'],datasets:[{data:[{{ kpis.recues }},{{ kpis.attente }}],backgroundColor:[blue,pale],borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,cutout:'68%',plugins:{legend:{display:false}}}})}
+})();
+</script>
+{% endblock %}

@@ -1013,10 +1013,10 @@ def export_pdf(request:Request,db:Session=Depends(get_db)):
     d=_report_data(db);out=io.BytesIO()
     page_w,page_h=landscape(A4)
     c=canvas.Canvas(out,pagesize=(page_w,page_h))
-    navy=colors.HexColor("#0B1739"); blue=colors.HexColor("#3563FF"); indigo=colors.HexColor("#5F6FFF")
-    green=colors.HexColor("#12B76A"); gold=colors.HexColor("#F79009"); red=colors.HexColor("#D92D20")
+    navy=colors.HexColor("#0B2D5C"); blue=colors.HexColor("#2E73D2"); indigo=colors.HexColor("#356FAF")
+    orange=colors.HexColor("#EF5B2A"); green=colors.HexColor("#2FAC67"); gold=colors.HexColor("#F79009"); red=colors.HexColor("#D92D20")
     ink=colors.HexColor("#101828"); muted=colors.HexColor("#667085"); line=colors.HexColor("#E4E7EC"); bg=colors.HexColor("#F5F7FB")
-    logo_path=BASE_DIR/"app"/"static"/"img"/"logo-firsi-um6p.png"
+    logo_path=BASE_DIR/"app"/"static"/"img"/"firsi-brand-logos.png"
 
     def txt(x,y,text,size=9,color=ink,font="Helvetica",align="left"):
         c.setFillColor(color);c.setFont(font,size)
@@ -1037,25 +1037,27 @@ def export_pdf(request:Request,db:Session=Depends(get_db)):
         ratio=(float(value)/maxv) if maxv else 0;c.setFillColor(accent);c.roundRect(x,y-9,max(0,min(w,w*ratio)),5,2.5,fill=1,stroke=0)
     def header(page_label):
         c.setFillColor(bg);c.rect(0,0,page_w,page_h,fill=1,stroke=0)
-        c.setFillColor(navy);c.rect(0,page_h-68,page_w,68,fill=1,stroke=0)
+        c.setFillColor(colors.white);c.rect(0,page_h-78,page_w,78,fill=1,stroke=0)
+        c.setFillColor(orange);c.rect(0,page_h-4,page_w,4,fill=1,stroke=0)
+        c.setStrokeColor(line);c.setLineWidth(.6);c.line(0,page_h-78,page_w,page_h-78)
         if logo_path.exists():
-            try:c.drawImage(ImageReader(str(logo_path)),24,page_h-55,width=88,height=33,preserveAspectRatio=True,mask='auto')
-            except Exception:txt(28,page_h-38,"FIRSI — UM6P",15,colors.white,"Helvetica-Bold")
-        else: txt(28,page_h-38,"FIRSI — UM6P",15,colors.white,"Helvetica-Bold")
-        txt(130,page_h-30,"TABLEAU DE BORD DÉCISIONNEL",13,colors.white,"Helvetica-Bold")
-        txt(130,page_h-46,"Formation & expérience collaborateur · Vue exécutive confidentielle",7.5,colors.HexColor("#C7D7FE"))
-        txt(page_w-26,page_h-31,page_label,7.5,colors.white,"Helvetica-Bold","right")
-        txt(page_w-26,page_h-46,datetime.now().strftime("%d/%m/%Y · %H:%M"),7,colors.HexColor("#C7D7FE"),align="right")
+            try:c.drawImage(ImageReader(str(logo_path)),24,page_h-66,width=245,height=54,preserveAspectRatio=True,mask='auto')
+            except Exception:txt(28,page_h-43,"UM6P · Fondation Ibn Rochd",13,navy,"Helvetica-Bold")
+        else: txt(28,page_h-43,"UM6P · Fondation Ibn Rochd",13,navy,"Helvetica-Bold")
+        txt(302,page_h-30,"FIRSI – UM6P",14,navy,"Helvetica-Bold")
+        txt(302,page_h-48,"Tableau de bord – Évaluation des formations",10.5,navy,"Helvetica-Bold")
+        txt(302,page_h-64,"Date de génération : "+datetime.now().strftime("%d/%m/%Y"),7.2,muted)
+        txt(page_w-26,page_h-31,page_label,7.2,orange,"Helvetica-Bold","right")
 
     # PAGE 1 — dashboard
     header("SYNTHÈSE EXÉCUTIVE")
-    margin=24;content_top=page_h-88
+    margin=24;content_top=page_h-96
     gap=10;cw=(page_w-2*margin-5*gap)/6;ch=63
     formation_count=db.query(SessionFormation).join(Categorie,SessionFormation.categorie_id==Categorie.id).filter(SessionFormation.active.is_(True),func.lower(Categorie.nom)=="formation").count()
     kpis=[
         ("Collaborateurs actifs",d["total_coll"],blue,"Effectif de référence"),
-        ("Formations actives",formation_count,indigo,"Sessions Formation"),
-        ("Couverture",f'{d["coverage"]}%',blue,f'{d["collaborateurs_formes"]} formé(s)'),
+        ("Formations actives",formation_count,orange,"Sessions Formation"),
+        ("Couverture",f'{d["coverage"]}%',orange,f'{d["collaborateurs_formes"]} formé(s)'),
         ("Participation",f'{d["participation"]}%',green,f'{d["total_rep"]} réponse(s)'),
         ("Satisfaction",f'{d["avg"]:.2f}/5',gold,"Moyenne globale"),
         ("Départs",d["total_departures"],red,"Historique conservé"),
@@ -1083,7 +1085,7 @@ def export_pdf(request:Request,db:Session=Depends(get_db)):
     section_title(right_x+16,y1-20,"Formations","Répartition par type · évaluations")
     txt(right_x+16,y1-45,"Type fixé par la session si renseigné, sinon choix du collaborateur.",6.8,muted)
     max_type=max([n for _,n in d["types"]]+[1])
-    accents=[blue,indigo,gold]
+    accents=[navy,orange,colors.HexColor("#6EA5E9")]
     yy=y1-72
     for i,(typ,n) in enumerate(d["types"]):
         hbar(right_x+18,yy-i*34,right_w-36,typ,n,max_type,accents[i])
