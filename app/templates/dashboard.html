@@ -136,17 +136,22 @@
   <div class="section-heading">
     <div>
       <span class="exec-eyebrow">FORMATIONS</span>
-      <h2>Répartition par type de formation</h2>
+      <h2>Répartition par type de formation</h2><p class="muted dashboard-subnote">Basée sur les évaluations : type défini par RH/Admin lorsqu’il existe, sinon réponse du collaborateur.</p>
     </div>
   </div>
   <div class="theme-grid">
     {% for t in formation_types %}
     <article class="theme-premium-card">
       <div class="theme-premium-head"><div><span class="theme-marker"></span><strong>{{ t.type }}</strong></div><span class="rating-badge">{{ t.pct }}%</span></div>
-      <div class="theme-stat-grid"><div><span>Sessions</span><strong>{{ t.count }}</strong></div><div><span>Part</span><strong>{{ t.pct }}%</strong></div></div>
+      <div class="theme-stat-grid"><div><span>Évaluations</span><strong>{{ t.count }}</strong></div><div><span>Part</span><strong>{{ t.pct }}%</strong></div></div>
       <div class="score-line"><span style="width: {{ t.pct }}%"></span></div>
     </article>
     {% endfor %}
+  </div>
+  <div class="type-source-strip">
+    <span><strong>{{ formation_type_sources.get('Session', 0) }}</strong> type(s) issus de la session</span>
+    <span><strong>{{ formation_type_sources.get('Collaborateur', 0) }}</strong> type(s) renseignés par les collaborateurs</span>
+    <span><strong>{{ formation_type_sources.get('Non renseigné', 0) }}</strong> non renseigné(s)</span>
   </div>
 </section>
 

@@ -25,6 +25,8 @@ try:
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.units import mm
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.utils import ImageReader
 except ImportError:
     colors = None
 
@@ -399,6 +401,39 @@ def change_password(request:Request,new_password:str=Form(...),confirm_password:
 @app.get("/logout")
 def logout(request:Request):request.session.clear();return RedirectResponse("/",303)
 
+FORMATION_TYPES=("Certifiante","Diplômante","Qualifiante")
+
+def _is_training_type_question(question):
+    label=(question.libelle or "").lower()
+    return "type" in label and "formation" in label
+
+def _resolved_training_type_for_response(response):
+    """Type retenu pour une évaluation : paramètre session prioritaire, sinon réponse collaborateur."""
+    fixed=(response.affectation.session.type_formation or "").strip()
+    if fixed in FORMATION_TYPES:
+        return fixed, "Session"
+    for detail in response.details:
+        if _is_training_type_question(detail.question):
+            value=(detail.valeur or "").strip()
+            if value in FORMATION_TYPES:
+                return value, "Collaborateur"
+    return None, "Non renseigné"
+
+def _formation_type_stats(db):
+    counts={t:0 for t in FORMATION_TYPES}
+    sources={"Session":0,"Collaborateur":0,"Non renseigné":0}
+    responses=(db.query(Reponse).join(Affectation,Reponse.affectation_id==Affectation.id)
+               .join(SessionFormation,Affectation.session_id==SessionFormation.id)
+               .join(Categorie,SessionFormation.categorie_id==Categorie.id)
+               .filter(func.lower(Categorie.nom)=="formation").all())
+    for r in responses:
+        typ,source=_resolved_training_type_for_response(r)
+        sources[source]=sources.get(source,0)+1
+        if typ: counts[typ]+=1
+    total=sum(counts.values())
+    items=[{"type":t,"count":counts[t],"pct":round(counts[t]/total*100,1) if total else 0} for t in FORMATION_TYPES]
+    return items,sources,total
+
 @app.get("/dashboard")
 def dashboard(request:Request,db:Session=Depends(get_db)):
     if not require_staff(request):return RedirectResponse("/",303)
@@ -477,18 +512,9 @@ def dashboard(request:Request,db:Session=Depends(get_db)):
             "satisfaction":round(float(avg_score),2),
         })
 
-    # Répartition des sessions de catégorie Formation par type de formation.
-    formation_types = []
-    for type_name in ["Certifiante", "Diplômante", "Qualifiante"]:
-        n = (db.query(SessionFormation)
-             .join(Categorie, SessionFormation.categorie_id == Categorie.id)
-             .filter(SessionFormation.active.is_(True), func.lower(Categorie.nom) == "formation",
-                     func.lower(SessionFormation.type_formation) == type_name.lower())
-             .count())
-        formation_types.append({"type": type_name, "count": n})
-    total_formation_types = sum(x["count"] for x in formation_types)
-    for x in formation_types:
-        x["pct"] = round(x["count"] / total_formation_types * 100, 1) if total_formation_types else 0
+    # Répartition par type basée sur les évaluations : type fixé sur la session
+    # si disponible, sinon choix du collaborateur dans le questionnaire.
+    formation_types, formation_type_sources, total_typed_evaluations = _formation_type_stats(db)
 
     deps=db.query(Departement.nom,func.count(Collaborateur.id)).outerjoin(Collaborateur).group_by(Departement.nom).all()
 
@@ -529,6 +555,8 @@ def dashboard(request:Request,db:Session=Depends(get_db)):
         },
         "themes":themes,
         "formation_types":formation_types,
+        "formation_type_sources":formation_type_sources,
+        "total_typed_evaluations":total_typed_evaluations,
         "department_labels":[x[0] for x in deps],
         "department_values":[x[1] for x in deps],
         "top_sessions":top_sessions,
@@ -730,9 +758,12 @@ def sessions_page(request:Request,db:Session=Depends(get_db)):
     })
 
 @app.post("/sessions")
-def create_session(request:Request,titre:str=Form(...),categorie_id:int=Form(...),questionnaire_id:int=Form(...),date_debut:str=Form(""),date_fin:str=Form(""),lieu:str=Form(""),animateur:str=Form(""),description:str=Form(""),db:Session=Depends(get_db)):
+def create_session(request:Request,titre:str=Form(...),categorie_id:int=Form(...),questionnaire_id:int=Form(...),type_formation:str=Form(""),date_debut:str=Form(""),date_fin:str=Form(""),lieu:str=Form(""),animateur:str=Form(""),description:str=Form(""),db:Session=Depends(get_db)):
     if not require_staff(request):return RedirectResponse("/",303)
-    db.add(SessionFormation(titre=titre.strip(),categorie_id=categorie_id,questionnaire_id=questionnaire_id,date_debut=date_debut or None,date_fin=date_fin or None,lieu=lieu.strip() or None,animateur=animateur.strip() or None,description=description.strip() or None));db.commit();return RedirectResponse("/sessions",303)
+    allowed={"Certifiante","Diplômante","Qualifiante"}
+    clean_type=type_formation.strip()
+    if clean_type not in allowed: clean_type=None
+    db.add(SessionFormation(titre=titre.strip(),categorie_id=categorie_id,questionnaire_id=questionnaire_id,type_formation=clean_type,date_debut=date_debut or None,date_fin=date_fin or None,lieu=lieu.strip() or None,animateur=animateur.strip() or None,description=description.strip() or None));db.commit();return RedirectResponse("/sessions?message=session_creee",303)
 
 @app.post("/sessions/{sid}/delete")
 def delete_session(sid:int,request:Request,db:Session=Depends(get_db)):
@@ -869,7 +900,7 @@ def evaluation_form(aid:int,request:Request,db:Session=Depends(get_db)):
     if request.session.get("role")!="COLLABORATEUR" or not a or a.collaborateur_id!=request.session.get("collaborateur_id"):raise HTTPException(403)
     if a.reponse:return RedirectResponse("/mon-espace?already=1",303)
     if a.beneficie is not True:return RedirectResponse("/mon-espace?error=participation_requise",303)
-    return templates.TemplateResponse("evaluation_form.html",{"request":request,"affectation":a,"questions":a.session.questionnaire.questions,"error":request.query_params.get("error")})
+    return templates.TemplateResponse("evaluation_form.html",{"request":request,"affectation":a,"questions":a.session.questionnaire.questions,"fixed_type_formation":a.session.type_formation,"error":request.query_params.get("error")})
 
 @app.post("/mon-espace/evaluer/{aid}")
 async def submit_evaluation(aid:int,request:Request,db:Session=Depends(get_db)):
@@ -881,6 +912,9 @@ async def submit_evaluation(aid:int,request:Request,db:Session=Depends(get_db)):
     for q in a.session.questionnaire.questions:
         vlist=form.getlist(f"q_{q.id}")
         v=", ".join(str(x).strip() for x in vlist if str(x).strip()) if q.type_reponse=="choix_multiple" else str(form.get(f"q_{q.id}","")).strip(); label=(q.libelle or "").lower()
+        # Si le type a été défini par RH/Admin sur la session, il est la valeur de référence.
+        if _is_training_type_question(q) and a.session.type_formation in FORMATION_TYPES:
+            v=a.session.type_formation
         if q.obligatoire and not v:return RedirectResponse(f"/mon-espace/evaluer/{aid}?error=required",303)
         if q.type_reponse in {"note5","note10"} and v:
             try:scores.append(float(v))
@@ -928,9 +962,9 @@ def export_xlsx(request:Request,db:Session=Depends(get_db)):
     ws=wb.create_sheet("Affectations");ws.append(["Collaborateur","Email","Session","Thématique","Type de formation","Bénéficie","Statut","Invitation envoyée","Date affectation"])
     for a in db.query(Affectation).order_by(Affectation.id):ws.append([f"{a.collaborateur.prenom} {a.collaborateur.nom}",a.collaborateur.email,a.session.titre,a.session.categorie.nom,a.session.type_formation,a.beneficie if a.beneficie is not None else "En attente",a.statut,"Oui" if a.invitation_envoyee else "Non",a.created_at.strftime("%d/%m/%Y")])
     # Évaluations
-    ws=wb.create_sheet("Évaluations");ws.append(["Collaborateur","Email","Thématique","Session","Type de formation","Satisfaction","Recommande","Commentaire","Date"])
+    ws=wb.create_sheet("Évaluations");ws.append(["Collaborateur","Email","Thématique","Session","Type de formation retenu","Source du type","Satisfaction","Recommande","Commentaire","Date"])
     for r in db.query(Reponse).order_by(Reponse.date_reponse.desc()):
-        a=r.affectation;ws.append([f"{a.collaborateur.prenom} {a.collaborateur.nom}",a.collaborateur.email,a.session.categorie.nom,a.session.titre,a.session.type_formation,r.satisfaction_globale,"Oui" if r.recommande else "Non",r.commentaire or "",r.date_reponse.strftime("%d/%m/%Y")])
+        a=r.affectation; resolved_type, type_source=_resolved_training_type_for_response(r);ws.append([f"{a.collaborateur.prenom} {a.collaborateur.nom}",a.collaborateur.email,a.session.categorie.nom,a.session.titre,resolved_type or "",type_source,r.satisfaction_globale,"Oui" if r.recommande else "Non",r.commentaire or "",r.date_reponse.strftime("%d/%m/%Y")])
     # Réponses détaillées
     ws=wb.create_sheet("Réponses détaillées");ws.append(["Collaborateur","Thématique","Session","Question","Type de question","Réponse","Date"])
     for r in db.query(Reponse).order_by(Reponse.date_reponse.desc()):
@@ -962,9 +996,8 @@ def _report_data(db):
     collaborateurs_formes=(db.query(func.count(func.distinct(Affectation.collaborateur_id))).join(SessionFormation,Affectation.session_id==SessionFormation.id).join(Categorie,SessionFormation.categorie_id==Categorie.id).join(Collaborateur,Affectation.collaborateur_id==Collaborateur.id).filter(func.lower(Categorie.nom)=="formation",Collaborateur.actif.is_(True),Affectation.beneficie.is_(True)).scalar() or 0)
     coverage=round(collaborateurs_formes/total_coll*100,1) if total_coll else 0
     participation=round(total_rep/total_ben*100,1) if total_ben else 0
-    types=[]
-    for typ in ["Certifiante","Diplômante","Qualifiante"]:
-        n=db.query(SessionFormation).join(Categorie,SessionFormation.categorie_id==Categorie.id).filter(SessionFormation.active.is_(True),func.lower(Categorie.nom)=="formation",func.lower(SessionFormation.type_formation)==typ.lower()).count();types.append((typ,n))
+    type_items,type_sources,total_typed_evaluations=_formation_type_stats(db)
+    types=[(x["type"],x["count"]) for x in type_items]
     themes=[]
     for cat in db.query(Categorie).order_by(Categorie.nom):
         score=float(db.query(func.avg(Reponse.satisfaction_globale)).join(Affectation,Reponse.affectation_id==Affectation.id).join(SessionFormation,Affectation.session_id==SessionFormation.id).filter(SessionFormation.categorie_id==cat.id).scalar() or 0)
@@ -978,24 +1011,142 @@ def export_pdf(request:Request,db:Session=Depends(get_db)):
     if colors is None:
         return RedirectResponse("/dashboard?error=pdf_dependency",303)
     d=_report_data(db);out=io.BytesIO()
-    doc=SimpleDocTemplate(out,pagesize=A4,rightMargin=16*mm,leftMargin=16*mm,topMargin=15*mm,bottomMargin=15*mm,title="Rapport FIRSI – UM6P")
-    styles=getSampleStyleSheet();title=ParagraphStyle("title",parent=styles["Title"],fontSize=22,leading=26,spaceAfter=5,textColor=colors.HexColor("#17365D"));sub=ParagraphStyle("sub",parent=styles["Normal"],fontSize=9,textColor=colors.HexColor("#667085"));h=ParagraphStyle("h",parent=styles["Heading2"],fontSize=13,leading=16,textColor=colors.HexColor("#17365D"),spaceBefore=8,spaceAfter=6);small=ParagraphStyle("small",parent=styles["Normal"],fontSize=8.5,leading=11)
-    story=[Paragraph("FIRSI – UM6P",title),Paragraph("Rapport exécutif des formations et évaluations",styles["Heading2"]),Paragraph(datetime.now().strftime("Édité le %d/%m/%Y à %H:%M"),sub),Spacer(1,7*mm)]
-    kpi=[[Paragraph(f'<b>COLLABORATEURS ACTIFS</b><br/><font size="16">{d["total_coll"]}</font>',small),Paragraph(f'<b>TAUX DE COUVERTURE</b><br/><font size="16">{d["coverage"]} %</font>',small),Paragraph(f'<b>TAUX DE PARTICIPATION</b><br/><font size="16">{d["participation"]} %</font>',small),Paragraph(f'<b>SATISFACTION</b><br/><font size="16">{d["avg"]:.2f} / 5</font>',small)]]
-    t=Table(kpi,colWidths=[43*mm]*4,rowHeights=[20*mm]);t.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,-1),colors.HexColor("#F3F6FA")),("BOX",(0,0),(-1,-1),0.5,colors.HexColor("#D0D5DD")),("INNERGRID",(0,0),(-1,-1),0.25,colors.HexColor("#D0D5DD")),("FONTNAME",(0,0),(-1,-1),"Helvetica-Bold"),("FONTSIZE",(0,0),(-1,-1),13),("ALIGN",(0,0),(-1,-1),"CENTER"),("VALIGN",(0,0),(-1,-1),"MIDDLE")]))
-    story += [t,Spacer(1,7*mm),Paragraph("Indicateurs clés",h),Paragraph(f'Formations actives : {db.query(SessionFormation).join(Categorie,SessionFormation.categorie_id==Categorie.id).filter(SessionFormation.active.is_(True),func.lower(Categorie.nom)=="formation").count()} · Départs / démissions : {d["total_departures"]} · Évaluations reçues : {d["total_rep"]} · Bénéficiaires confirmés : {d["total_ben"]}',small),Paragraph("Répartition des formations par type",h)]
-    type_rows=[["Type","Nombre","Part"]]+[[a,str(b),f'{round(b/sum(x[1] for x in d["types"])*100,1) if sum(x[1] for x in d["types"]) else 0} %'] for a,b in d["types"]]
-    tt=Table(type_rows,colWidths=[80*mm,35*mm,35*mm]);tt.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),colors.HexColor("#17365D")),("TEXTCOLOR",(0,0),(-1,0),colors.white),("GRID",(0,0),(-1,-1),0.3,colors.HexColor("#D0D5DD")),("FONTSIZE",(0,0),(-1,-1),9),("ALIGN",(1,1),(-1,-1),"CENTER"),("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.white,colors.HexColor("#F8FAFC")])]))
-    story += [tt,Spacer(1,6*mm),Paragraph("Performance par thématique",h)]
-    theme_rows=[["Thématique","Satisfaction /5","Évaluations"]]+[[a,f'{b:.2f}',str(c)] for a,b,c in d["themes"]]
-    th=Table(theme_rows,colWidths=[95*mm,35*mm,35*mm]);th.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),colors.HexColor("#17365D")),("TEXTCOLOR",(0,0),(-1,0),colors.white),("GRID",(0,0),(-1,-1),0.3,colors.HexColor("#D0D5DD")),("FONTSIZE",(0,0),(-1,-1),8.5),("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.white,colors.HexColor("#F8FAFC")]),("ALIGN",(1,1),(-1,-1),"CENTER")]))
-    story += [th,PageBreak(),Paragraph("Synthèse opérationnelle",title),Spacer(1,4*mm)]
-    top=db.query(SessionFormation.titre,func.avg(Reponse.satisfaction_globale),func.count(Reponse.id)).join(Affectation,Affectation.session_id==SessionFormation.id).join(Reponse,Reponse.affectation_id==Affectation.id).group_by(SessionFormation.id,SessionFormation.titre).order_by(func.avg(Reponse.satisfaction_globale).desc()).limit(10).all()
-    rows=[["Session","Satisfaction","Réponses"]]+[[x[0],f'{float(x[1]):.2f} / 5',str(x[2])] for x in top]
-    ts=Table(rows,colWidths=[100*mm,35*mm,30*mm]);ts.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),colors.HexColor("#17365D")),("TEXTCOLOR",(0,0),(-1,0),colors.white),("GRID",(0,0),(-1,-1),0.3,colors.HexColor("#D0D5DD")),("FONTSIZE",(0,0),(-1,-1),8.5),("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.white,colors.HexColor("#F8FAFC")])]))
-    story += [Paragraph("Top des sessions évaluées",h),ts,Spacer(1,8*mm),Paragraph("Confidentialité",h),Paragraph("Ce rapport reprend la vue globale du tableau de bord. Les départements ne sont pas présentés dans la synthèse exécutive afin de préserver une lecture globale et confidentielle. Les données détaillées sont disponibles dans l’export Excel sécurisé.",small),Spacer(1,8*mm),Paragraph("FIRSI – UM6P · Document généré automatiquement depuis la plateforme d’évaluation",sub)]
-    doc.build(story);out.seek(0)
-    return StreamingResponse(out,media_type="application/pdf",headers={"Content-Disposition":'attachment; filename="FIRSI_rapport_executif.pdf"'})
+    page_w,page_h=landscape(A4)
+    c=canvas.Canvas(out,pagesize=(page_w,page_h))
+    navy=colors.HexColor("#0B1739"); blue=colors.HexColor("#3563FF"); indigo=colors.HexColor("#5F6FFF")
+    green=colors.HexColor("#12B76A"); gold=colors.HexColor("#F79009"); red=colors.HexColor("#D92D20")
+    ink=colors.HexColor("#101828"); muted=colors.HexColor("#667085"); line=colors.HexColor("#E4E7EC"); bg=colors.HexColor("#F5F7FB")
+    logo_path=BASE_DIR/"app"/"static"/"img"/"logo-firsi-um6p.png"
+
+    def txt(x,y,text,size=9,color=ink,font="Helvetica",align="left"):
+        c.setFillColor(color);c.setFont(font,size)
+        if align=="center": c.drawCentredString(x,y,str(text))
+        elif align=="right": c.drawRightString(x,y,str(text))
+        else: c.drawString(x,y,str(text))
+    def card(x,y,w,h,title,value,accent=blue,subtitle=""):
+        c.setFillColor(colors.white);c.setStrokeColor(line);c.setLineWidth(.6);c.roundRect(x,y,w,h,8,fill=1,stroke=1)
+        c.setFillColor(accent);c.roundRect(x+8,y+h-18,26,7,3.5,fill=1,stroke=0)
+        txt(x+10,y+h-28,title.upper(),7,muted,"Helvetica-Bold")
+        txt(x+10,y+15,value,18,ink,"Helvetica-Bold")
+        if subtitle: txt(x+10,y+5,subtitle,6.5,muted)
+    def section_title(x,y,eyebrow,title):
+        txt(x,y,eyebrow.upper(),6.5,indigo,"Helvetica-Bold");txt(x,y-15,title,12,ink,"Helvetica-Bold")
+    def hbar(x,y,w,label,value,maxv,accent=blue,suffix=""):
+        txt(x,y,label,7.5,ink,"Helvetica-Bold");txt(x+w,y,f"{value}{suffix}",7.5,ink,"Helvetica-Bold","right")
+        c.setFillColor(colors.HexColor("#EEF2F6"));c.roundRect(x,y-9,w,5,2.5,fill=1,stroke=0)
+        ratio=(float(value)/maxv) if maxv else 0;c.setFillColor(accent);c.roundRect(x,y-9,max(0,min(w,w*ratio)),5,2.5,fill=1,stroke=0)
+    def header(page_label):
+        c.setFillColor(bg);c.rect(0,0,page_w,page_h,fill=1,stroke=0)
+        c.setFillColor(navy);c.rect(0,page_h-68,page_w,68,fill=1,stroke=0)
+        if logo_path.exists():
+            try:c.drawImage(ImageReader(str(logo_path)),24,page_h-55,width=88,height=33,preserveAspectRatio=True,mask='auto')
+            except Exception:txt(28,page_h-38,"FIRSI — UM6P",15,colors.white,"Helvetica-Bold")
+        else: txt(28,page_h-38,"FIRSI — UM6P",15,colors.white,"Helvetica-Bold")
+        txt(130,page_h-30,"TABLEAU DE BORD DÉCISIONNEL",13,colors.white,"Helvetica-Bold")
+        txt(130,page_h-46,"Formation & expérience collaborateur · Vue exécutive confidentielle",7.5,colors.HexColor("#C7D7FE"))
+        txt(page_w-26,page_h-31,page_label,7.5,colors.white,"Helvetica-Bold","right")
+        txt(page_w-26,page_h-46,datetime.now().strftime("%d/%m/%Y · %H:%M"),7,colors.HexColor("#C7D7FE"),align="right")
+
+    # PAGE 1 — dashboard
+    header("SYNTHÈSE EXÉCUTIVE")
+    margin=24;content_top=page_h-88
+    gap=10;cw=(page_w-2*margin-5*gap)/6;ch=63
+    formation_count=db.query(SessionFormation).join(Categorie,SessionFormation.categorie_id==Categorie.id).filter(SessionFormation.active.is_(True),func.lower(Categorie.nom)=="formation").count()
+    kpis=[
+        ("Collaborateurs actifs",d["total_coll"],blue,"Effectif de référence"),
+        ("Formations actives",formation_count,indigo,"Sessions Formation"),
+        ("Couverture",f'{d["coverage"]}%',blue,f'{d["collaborateurs_formes"]} formé(s)'),
+        ("Participation",f'{d["participation"]}%',green,f'{d["total_rep"]} réponse(s)'),
+        ("Satisfaction",f'{d["avg"]:.2f}/5',gold,"Moyenne globale"),
+        ("Départs",d["total_departures"],red,"Historique conservé"),
+    ]
+    for i,item in enumerate(kpis):card(margin+i*(cw+gap),content_top-ch,cw,ch,*item)
+
+    y1=content_top-ch-22
+    left_w=360;right_x=margin+left_w+14;right_w=page_w-margin-right_x
+    # Participation panel
+    c.setFillColor(colors.white);c.setStrokeColor(line);c.roundRect(margin,y1-170,left_w,170,9,fill=1,stroke=1)
+    section_title(margin+16,y1-20,"Évaluations","Participation & couverture")
+    # donut-like ring participation
+    cx=margin+88;cy=y1-98;r=43
+    c.setLineWidth(10);c.setStrokeColor(colors.HexColor("#E9EEF7"));c.circle(cx,cy,r,fill=0,stroke=1)
+    c.setStrokeColor(green)
+    if d["participation"]:
+        c.arc(cx-r,cy-r,cx+r,cy+r,90,-360*d["participation"]/100)
+    txt(cx,cy+2,f'{d["participation"]}%',14,ink,"Helvetica-Bold","center");txt(cx,cy-12,"participation",6.5,muted,align="center")
+    hbar(margin+158,y1-72,175,"Couverture",d["coverage"],100,blue,"%")
+    hbar(margin+158,y1-107,175,"Participation",d["participation"],100,green,"%")
+    hbar(margin+158,y1-142,175,"Satisfaction",round(d["avg"],2),5,gold,"/5")
+
+    # Types panel based on answers
+    c.setFillColor(colors.white);c.setStrokeColor(line);c.roundRect(right_x,y1-170,right_w,170,9,fill=1,stroke=1)
+    section_title(right_x+16,y1-20,"Formations","Répartition par type · évaluations")
+    txt(right_x+16,y1-45,"Type fixé par la session si renseigné, sinon choix du collaborateur.",6.8,muted)
+    max_type=max([n for _,n in d["types"]]+[1])
+    accents=[blue,indigo,gold]
+    yy=y1-72
+    for i,(typ,n) in enumerate(d["types"]):
+        hbar(right_x+18,yy-i*34,right_w-36,typ,n,max_type,accents[i])
+    src=d.get("type_sources",{})
+    txt(right_x+18,y1-158,f'Source : session {src.get("Session",0)} · collaborateur {src.get("Collaborateur",0)} · non renseigné {src.get("Non renseigné",0)}',6.5,muted)
+
+    # Bottom: themes + top sessions
+    y2=y1-192
+    panel_h=185
+    c.setFillColor(colors.white);c.setStrokeColor(line);c.roundRect(margin,y2-panel_h,left_w,panel_h,9,fill=1,stroke=1)
+    section_title(margin+16,y2-20,"Thématiques","Satisfaction moyenne")
+    themes=sorted(d["themes"],key=lambda x:x[1],reverse=True)[:5]
+    yy=y2-54
+    for i,(name,score,rec) in enumerate(themes):
+        hbar(margin+18,yy-i*27,left_w-36,(name[:30]+'…') if len(name)>30 else name,round(score,2),5,indigo,"/5")
+    if not themes: txt(margin+18,y2-80,"Aucune évaluation disponible",8,muted)
+
+    c.setFillColor(colors.white);c.setStrokeColor(line);c.roundRect(right_x,y2-panel_h,right_w,panel_h,9,fill=1,stroke=1)
+    section_title(right_x+16,y2-20,"Performance","Top sessions évaluées")
+    top=db.query(SessionFormation.titre,func.avg(Reponse.satisfaction_globale),func.count(Reponse.id)).join(Affectation,Affectation.session_id==SessionFormation.id).join(Reponse,Reponse.affectation_id==Affectation.id).group_by(SessionFormation.id,SessionFormation.titre).order_by(func.avg(Reponse.satisfaction_globale).desc()).limit(5).all()
+    yy=y2-56
+    if top:
+        for i,(name,score,nb) in enumerate(top):
+            label=(name[:34]+'…') if len(name)>34 else name
+            hbar(right_x+18,yy-i*27,right_w-36,label,round(float(score),2),5,blue,"/5")
+    else: txt(right_x+18,y2-80,"Aucune session évaluée",8,muted)
+    txt(page_w/2,12,"FIRSI – UM6P · Rapport généré automatiquement · Données détaillées disponibles dans l’export Excel",6.5,muted,align="center")
+    c.showPage()
+
+    # PAGE 2 — decision support detail
+    header("ANALYSE DE PILOTAGE")
+    topy=page_h-92
+    section_title(margin,topy,"Lecture décisionnelle","Indicateurs d’action")
+    # 4 action cards, numbers only + concise labels
+    action_gap=12;aw=(page_w-2*margin-action_gap*3)/4;ay=topy-92
+    action_data=[
+        ("Bénéficiaires",d["total_ben"],green,"Base de participation"),
+        ("Évaluations reçues",d["total_rep"],blue,"Questionnaires soumis"),
+        ("En attente",max(d["total_ben"]-d["total_rep"],0),gold,"Relances prioritaires"),
+        ("Non formés",max(d["total_coll"]-d["collaborateurs_formes"],0),red,"Couverture à renforcer"),
+    ]
+    for i,item in enumerate(action_data):card(margin+i*(aw+action_gap),ay,aw,66,*item)
+
+    # thematic matrix visual
+    matrix_y=ay-26;matrix_h=245
+    c.setFillColor(colors.white);c.setStrokeColor(line);c.roundRect(margin,matrix_y-matrix_h,page_w-2*margin,matrix_h,9,fill=1,stroke=1)
+    section_title(margin+16,matrix_y-20,"Performance par thématique","Satisfaction et volume d’évaluations")
+    rows=sorted(d["themes"],key=lambda x:(x[2],x[1]),reverse=True)[:8]
+    max_rec=max([r[2] for r in rows]+[1]);row_y=matrix_y-58
+    for i,(name,score,rec) in enumerate(rows):
+        yy=row_y-i*24
+        txt(margin+18,yy,(name[:28]+'…') if len(name)>28 else name,7.3,ink,"Helvetica-Bold")
+        # satisfaction bar
+        bx=margin+190;bw=210;c.setFillColor(colors.HexColor("#EEF2F6"));c.roundRect(bx,yy-4,bw,5,2.5,fill=1,stroke=0);c.setFillColor(indigo);c.roundRect(bx,yy-4,bw*(score/5 if score else 0),5,2.5,fill=1,stroke=0)
+        txt(bx+bw+10,yy,f"{score:.2f}/5",7,ink,"Helvetica-Bold")
+        # volume bar
+        vx=margin+500;vw=220;c.setFillColor(colors.HexColor("#EEF2F6"));c.roundRect(vx,yy-4,vw,5,2.5,fill=1,stroke=0);c.setFillColor(blue);c.roundRect(vx,yy-4,vw*(rec/max_rec if max_rec else 0),5,2.5,fill=1,stroke=0)
+        txt(vx+vw+8,yy,str(rec),7,ink,"Helvetica-Bold")
+    if not rows: txt(margin+18,matrix_y-80,"Aucune donnée disponible",8,muted)
+    txt(margin+18,matrix_y-matrix_h+16,"Confidentialité : la synthèse exécutive ne présente pas de ventilation par département.",6.5,muted)
+    txt(page_w/2,12,"FIRSI – UM6P · Tableau de bord décisionnel",6.5,muted,align="center")
+    c.save();out.seek(0)
+    return StreamingResponse(out,media_type="application/pdf",headers={"Content-Disposition":'attachment; filename="FIRSI_dashboard_decisionnel.pdf"'})
 
 @app.post("/admin/nettoyage-tests")
 def cleanup_test_data(request:Request,confirmation:str=Form(...),db:Session=Depends(get_db)):

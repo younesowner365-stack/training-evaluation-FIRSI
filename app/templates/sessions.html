@@ -9,7 +9,7 @@
     <form method="post">
       <label>Titre</label><input name="titre" required>
       <label>Thématique</label><select name="categorie_id">{% for c in categories %}<option value="{{ c.id }}">{{ c.nom }}</option>{% endfor %}</select>
-      <label>Type de formation</label><select name="type_formation"><option>Certifiante</option><option>Diplômante</option><option selected>Qualifiante</option></select>
+      <label>Type de formation</label><select name="type_formation"><option value="" selected>À renseigner par le collaborateur</option><option>Certifiante</option><option>Diplômante</option><option>Qualifiante</option></select><p class="field-hint">Si vous définissez le type ici, il sera affiché en lecture seule dans le questionnaire. Sinon, le collaborateur le choisira lui-même.</p>
       <label>Questionnaire</label><select name="questionnaire_id">{% for q in questionnaires %}<option value="{{ q.id }}">{{ q.titre }}</option>{% endfor %}</select>
       <label>Date début</label><input type="date" name="date_debut">
       <label>Date fin</label><input type="date" name="date_fin">
@@ -26,7 +26,7 @@
       <tr>
         <td>{{ s.titre }}</td>
         <td>{{ s.categorie.nom }}</td>
-        <td>{{ s.type_formation }}</td>
+        <td>{% if s.type_formation %}<span class="status-success">{{ s.type_formation }}</span><br><small class="muted">Défini par RH/Admin</small>{% else %}<span class="status-neutral-inline">À renseigner</span><br><small class="muted">Choix du collaborateur</small>{% endif %}</td>
         <td>{{ s.questionnaire.titre }}</td>
         <td>
           <form method="post" action="/sessions/{{ s.id }}/delete" onsubmit="return confirm('Supprimer cette session et toutes ses affectations ?');">
