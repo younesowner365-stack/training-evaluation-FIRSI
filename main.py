@@ -176,6 +176,37 @@ class AuditLog(Base):
     details=Column(Text)
     created_at=Column(DateTime,default=datetime.utcnow)
 
+class Consultation(Base):
+    __tablename__ = "consultations"
+    id = Column(Integer, primary_key=True)
+    titre = Column(String(255), nullable=False)
+    description = Column(Text)
+    statut = Column(String(20), nullable=False, default="brouillon")
+    date_cloture = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    formations = relationship("ConsultationFormation", back_populates="consultation", cascade="all, delete-orphan")
+
+class ConsultationFormation(Base):
+    __tablename__ = "consultation_formations"
+    id = Column(Integer, primary_key=True)
+    consultation_id = Column(Integer, ForeignKey("consultations.id"), nullable=False)
+    titre = Column(String(255), nullable=False)
+    dates_previsionnelles = Column(String(120))
+    consultation = relationship("Consultation", back_populates="formations")
+
+class ConsultationReponse(Base):
+    __tablename__ = "consultation_reponses"
+    __table_args__ = (UniqueConstraint("formation_id", "collaborateur_id", name="uq_consultation_formation_collaborateur"),)
+    id = Column(Integer, primary_key=True)
+    formation_id = Column(Integer, ForeignKey("consultation_formations.id"), nullable=False)
+    collaborateur_id = Column(Integer, ForeignKey("collaborateurs.id"), nullable=False)
+    choix = Column(String(20), nullable=False)
+    commentaire = Column(Text)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    modification_autorisee = Column(Boolean, nullable=False, default=False)
+    formation = relationship("ConsultationFormation")
+    collaborateur = relationship("Collaborateur")
+
 Base.metadata.create_all(bind=engine)
 
 def ensure_runtime_schema():
@@ -189,6 +220,7 @@ def ensure_runtime_schema():
             conn.execute(text("ALTER TABLE collaborateurs ADD COLUMN IF NOT EXISTS motif_depart VARCHAR(80)"))
             conn.execute(text("ALTER TABLE affectations ADD COLUMN IF NOT EXISTS beneficie BOOLEAN"))
             conn.execute(text("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS type_formation VARCHAR(50)"))
+            conn.execute(text("ALTER TABLE consultation_reponses ADD COLUMN IF NOT EXISTS modification_autorisee BOOLEAN NOT NULL DEFAULT FALSE"))
         else:
             cols={row[1] for row in conn.execute(text("PRAGMA table_info(collaborateurs)"))}
             if "password_hash" not in cols:
@@ -204,6 +236,9 @@ def ensure_runtime_schema():
             affect_cols={row[1] for row in conn.execute(text("PRAGMA table_info(affectations)"))}
             if "beneficie" not in affect_cols:
                 conn.execute(text("ALTER TABLE affectations ADD COLUMN beneficie BOOLEAN"))
+            response_cols={row[1] for row in conn.execute(text("PRAGMA table_info(consultation_reponses)"))}
+            if "modification_autorisee" not in response_cols:
+                conn.execute(text("ALTER TABLE consultation_reponses ADD COLUMN modification_autorisee BOOLEAN NOT NULL DEFAULT 0"))
             session_cols={row[1] for row in conn.execute(text("PRAGMA table_info(sessions)"))}
             if "type_formation" not in session_cols:
                 conn.execute(text("ALTER TABLE sessions ADD COLUMN type_formation VARCHAR(50)"))
@@ -211,7 +246,10 @@ def ensure_runtime_schema():
 ensure_runtime_schema()
 
 app=FastAPI(title="FIRSI - UM6P",version="5.0")
-app.add_middleware(SessionMiddleware,secret_key=os.getenv("SECRET_KEY","firsi-local-change-me"),same_site="lax",https_only=os.getenv("ENVIRONMENT")=="production",max_age=28800)
+SESSION_SECRET = os.getenv("SECRET_KEY")
+if os.getenv("ENVIRONMENT") == "production" and (not SESSION_SECRET or len(SESSION_SECRET) < 32):
+    raise RuntimeError("SECRET_KEY doit contenir au moins 32 caracteres en production")
+app.add_middleware(SessionMiddleware,secret_key=SESSION_SECRET or secrets.token_urlsafe(48),same_site="lax",https_only=os.getenv("ENVIRONMENT")=="production",max_age=28800)
 app.mount("/static",StaticFiles(directory=BASE_DIR/"app"/"static"),name="static")
 templates=Jinja2Templates(directory=BASE_DIR/"app"/"templates")
 
@@ -289,7 +327,7 @@ def seed():
     db=SessionLocal()
     try:
         if not db.query(User).filter(User.username==os.getenv("ADMIN_USERNAME","admin")).first():
-            db.add(User(fullname="Administrateur principal",username=os.getenv("ADMIN_USERNAME","admin"),email=os.getenv("ADMIN_EMAIL"),password_hash=hash_password(os.getenv("ADMIN_PASSWORD","Admin@2026")),role="ADMIN"))
+            db.add(User(fullname="Administrateur principal",username=os.getenv("ADMIN_USERNAME","admin"),email=os.getenv("ADMIN_EMAIL"),password_hash=hash_password(os.getenv("ADMIN_PASSWORD") or secrets.token_urlsafe(32)),role="ADMIN"))
         for d in ["Programme & Bourse","Ressources Humaines","Finance","Communication"]:
             if not db.query(Departement).filter_by(nom=d).first():db.add(Departement(nom=d))
         for nom,desc in {
@@ -321,6 +359,142 @@ def seed():
         db.commit()
     finally:db.close()
 seed()
+
+# CONSULTATIONS V8.3 : module separe des evaluations apres formation.
+def _consultation_open(c):
+    return c.statut == "ouverte" and (not c.date_cloture or c.date_cloture >= datetime.utcnow())
+
+def _consultation_staff(request):
+    if not require_staff(request):
+        raise HTTPException(status_code=403, detail="Acces RH/Admin requis")
+
+def _consultation_collab(request, db):
+    cid = request.session.get("collaborateur_id")
+    if request.session.get("role") != "COLLABORATEUR" or not cid:
+        raise HTTPException(status_code=403, detail="Connexion collaborateur requise")
+    c = db.get(Collaborateur, cid)
+    if not c or not c.actif or c.must_change_password:
+        raise HTTPException(status_code=403, detail="Acces non autorise")
+    return c
+
+def _consultation_csrf(request):
+    token = request.session.get("consultation_csrf")
+    if not token:
+        token = secrets.token_urlsafe(32)
+        request.session["consultation_csrf"] = token
+    return token
+
+def _check_consultation_csrf(request, token):
+    expected = request.session.get("consultation_csrf")
+    if not expected or not hmac.compare_digest(expected, token):
+        raise HTTPException(status_code=403, detail="Jeton de formulaire invalide")
+
+@app.get("/consultations")
+def consultations_admin(request: Request, db: Session = Depends(get_db)):
+    _consultation_staff(request)
+    cs = db.query(Consultation).order_by(Consultation.id.desc()).all()
+    return templates.TemplateResponse("consultations.html", {"request":request, "consultations":cs, "csrf":_consultation_csrf(request)})
+
+@app.post("/consultations")
+def consultation_create(request: Request, titre: str=Form(...), description: str=Form(""), date_cloture: str=Form(""), csrf_token: str=Form(...), db:Session=Depends(get_db)):
+    _consultation_staff(request); _check_consultation_csrf(request, csrf_token)
+    if not titre.strip() or len(titre)>255: raise HTTPException(422,"Titre invalide")
+    try: end = datetime.strptime(date_cloture,"%Y-%m-%d") if date_cloture else None
+    except ValueError: raise HTTPException(422,"Date invalide")
+    c=Consultation(titre=titre.strip(),description=description[:3000],date_cloture=end)
+    db.add(c); db.commit(); audit(db,request,"consultation_creation",str(c.id))
+    return RedirectResponse(f"/consultations/{c.id}",303)
+
+@app.get("/consultations/{cid}")
+def consultation_detail(cid:int,request:Request,db:Session=Depends(get_db)):
+    _consultation_staff(request)
+    c=db.get(Consultation,cid)
+    if not c: raise HTTPException(404)
+    active=db.query(Collaborateur).filter(Collaborateur.actif.is_(True)).count()
+    rows=[]
+    for formation in c.formations:
+        rs=db.query(ConsultationReponse).filter_by(formation_id=formation.id).all()
+        counts=Counter(r.choix for r in rs)
+        rows.append({"formation":formation,"reponses":rs,"counts":counts,"taux":round(len(rs)*100/active,1) if active else 0})
+    return templates.TemplateResponse("consultation_detail.html",{"request":request,"consultation":c,"rows":rows,"active":active,"csrf":_consultation_csrf(request)})
+
+@app.post("/consultations/{cid}/formations")
+def consultation_add_formation(cid:int,request:Request,titre:str=Form(...),dates_previsionnelles:str=Form(""),csrf_token:str=Form(...),db:Session=Depends(get_db)):
+    _consultation_staff(request);_check_consultation_csrf(request,csrf_token)
+    c=db.get(Consultation,cid)
+    if not c:raise HTTPException(404)
+    if c.statut!="brouillon":raise HTTPException(409,"Modifier uniquement un brouillon")
+    if not titre.strip() or len(titre)>255:raise HTTPException(422)
+    db.add(ConsultationFormation(consultation_id=cid,titre=titre.strip(),dates_previsionnelles=dates_previsionnelles[:120]));db.commit()
+    audit(db,request,"consultation_formation_ajout",str(cid))
+    return RedirectResponse(f"/consultations/{cid}",303)
+
+@app.post("/consultations/{cid}/statut")
+def consultation_change_status(cid:int,request:Request,statut:str=Form(...),csrf_token:str=Form(...),db:Session=Depends(get_db)):
+    _consultation_staff(request);_check_consultation_csrf(request,csrf_token)
+    c=db.get(Consultation,cid)
+    if not c:raise HTTPException(404)
+    if statut not in ("ouverte","cloturee"):raise HTTPException(422)
+    if statut=="ouverte" and not c.formations:raise HTTPException(409,"Ajoutez une formation")
+    c.statut=statut;db.commit();audit(db,request,"consultation_statut",f"{cid}:{statut}")
+    return RedirectResponse(f"/consultations/{cid}",303)
+
+@app.get("/mon-espace/consultations")
+def consultations_collaborateur(request:Request,db:Session=Depends(get_db)):
+    collab=_consultation_collab(request,db)
+    cs=db.query(Consultation).filter(Consultation.statut=="ouverte").order_by(Consultation.id.desc()).all()
+    cs=[c for c in cs if _consultation_open(c)]
+    answers={r.formation_id:r for r in db.query(ConsultationReponse).filter_by(collaborateur_id=collab.id).all()}
+    return templates.TemplateResponse("consultations_collaborateur.html",{"request":request,"consultations":cs,"answers":answers,"csrf":_consultation_csrf(request),"collaborateur":collab})
+
+@app.post("/mon-espace/consultations/{fid}/repondre")
+def consultation_answer(fid:int,request:Request,choix:str=Form(...),commentaire:str=Form(""),csrf_token:str=Form(...),db:Session=Depends(get_db)):
+    collab=_consultation_collab(request,db);_check_consultation_csrf(request,csrf_token)
+    formation=db.get(ConsultationFormation,fid)
+    if not formation or not _consultation_open(formation.consultation):raise HTTPException(403,"Consultation fermee")
+    if choix not in ("oui","peutetre","non"):raise HTTPException(422,"Choix invalide")
+    r=db.query(ConsultationReponse).filter_by(formation_id=fid,collaborateur_id=collab.id).first()
+    if r and not r.modification_autorisee:
+        raise HTTPException(409,"Reponse deja validee. Demandez une autorisation administrateur.")
+    if not r:
+        r=ConsultationReponse(formation_id=fid,collaborateur_id=collab.id)
+        db.add(r)
+    r.modification_autorisee=False
+    r.choix=choix;r.commentaire=commentaire[:2000];r.updated_at=datetime.utcnow()
+    db.commit();audit(db,request,"consultation_reponse",f"formation={fid};collaborateur={collab.id}")
+    return RedirectResponse("/mon-espace/consultations?enregistre=1",303)
+
+@app.post("/consultations/{cid}/reponses/{rid}/autoriser-modification")
+def consultation_authorize_edit(cid:int,rid:int,request:Request,csrf_token:str=Form(...),db:Session=Depends(get_db)):
+    if not require_admin(request):
+        raise HTTPException(403,"Autorisation administrateur requise")
+    _check_consultation_csrf(request,csrf_token)
+    r=db.get(ConsultationReponse,rid)
+    if not r or r.formation.consultation_id!=cid:
+        raise HTTPException(404,"Reponse introuvable")
+    if r.modification_autorisee:
+        raise HTTPException(409,"Modification deja autorisee")
+    r.modification_autorisee=True
+    db.commit()
+    audit(db,request,"consultation_autorisation_modification",f"consultation={cid};reponse={rid};collaborateur={r.collaborateur_id}")
+    return RedirectResponse(f"/consultations/{cid}",303)
+
+@app.get("/consultations/{cid}/export.xlsx")
+def consultation_export(cid:int,request:Request,db:Session=Depends(get_db)):
+    _consultation_staff(request)
+    c=db.get(Consultation,cid)
+    if not c:raise HTTPException(404)
+    wb=Workbook();ws=wb.active;ws.title="Reponses nominatives"
+    ws.append(["Consultation","Formation","Dates previsionnelles","Code collaborateur","Nom","Prenom","Email","Interet","Commentaire","Derniere mise a jour"])
+    for f in c.formations:
+        for r in db.query(ConsultationReponse).filter_by(formation_id=f.id).all():
+            x=r.collaborateur
+            ws.append([c.titre,f.titre,f.dates_previsionnelles,x.code,x.nom,x.prenom,x.email,r.choix,r.commentaire,r.updated_at.isoformat() if r.updated_at else ""])
+    ws.freeze_panes="A2";ws.auto_filter.ref=ws.dimensions
+    for col in ws.columns:
+        ws.column_dimensions[col[0].column_letter].width=min(45,max(15,max(len(str(cell.value or "")) for cell in col)+2))
+    stream=io.BytesIO();wb.save(stream);stream.seek(0)
+    return StreamingResponse(stream,media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",headers={"Content-Disposition":f'attachment; filename="consultation_{cid}.xlsx"'})
 
 @app.get("/")
 def landing(request:Request):
